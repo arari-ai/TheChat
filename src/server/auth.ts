@@ -14,9 +14,10 @@ export function token(): string {
 export async function getViewer(request: Request, env: Env): Promise<Viewer|null> {
   const value = request.headers.get('cookie')?.split(';').map(s=>s.trim()).find(s=>s.startsWith(`${cookieName}=`))?.slice(cookieName.length+1);
   if (!value || !env.DB) return null;
-  return await env.DB.prepare('SELECT u.id,u.email,u.name,u.role,u.affiliation FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>?').bind(await sha256(value), Date.now()).first<Viewer>();
+  return await env.DB.prepare('SELECT u.id,u.email,u.name,u.role,u.affiliation FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>? AND u.disabled_at IS NULL').bind(await sha256(value), Date.now()).first<Viewer>();
 }
 export async function sendMail(env: Env, to: string, subject: string, text: string, headers?: Record<string,string>): Promise<void> {
+  if(env.DB && await env.DB.prepare('SELECT 1 FROM users WHERE email=? AND disabled_at IS NOT NULL').bind(to.toLowerCase()).first())return;
   const from = config(env).mailFrom;
   if (!from) throw new Error('mailFrom is not configured');
   if (env.EMAIL) { await env.EMAIL.send({ to, from, subject, text, headers }); return; }

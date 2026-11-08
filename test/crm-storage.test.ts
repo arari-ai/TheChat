@@ -31,7 +31,7 @@ beforeAll(async () => {
     "0003_message_sequence.sql",
     "0004_mail_original.sql",
     "0005_space_archive.sql",
-    "0006_crm.sql"
+    "0006_crm.sql", "0007_hrm.sql"
   ]) {
     const sql = await readFile(
       new URL("../migrations/" + file, import.meta.url),

@@ -1,3 +1,4 @@
+import {hrmApi,changeAccount,validEmail as hrmEmail} from './hrm';
 import {crmApi,crmOutboxStatement,scheduleCrmDelivery} from './crm';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
@@ -20,12 +21,13 @@ const viewer = async (c: Context<Bindings>) => getViewer(c.req.raw,c.env);
 const responseCookie = (value: string, request: Request) => `${cookieName}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000${new URL(request.url).protocol === 'https:' ? '; Secure' : ''}`;
 
 app.use('/api/*', async (c,next) => {
-  if (!['GET','HEAD','OPTIONS'].includes(c.req.method)) {
+  if (!c.req.path.startsWith('/api/hrm/') && !['GET','HEAD','OPTIONS'].includes(c.req.method)) {
     const origin = c.req.header('origin');
     if (origin && origin !== new URL(c.req.url).origin) return jsonError(c,403,'Invalid origin');
   }
   await next();
 });
+app.route('/api/hrm',hrmApi);
 app.route('/api/crm',crmApi);
 app.get('/api/health', c => c.json({ ok:true, version:'1.0.0' }));
 app.get('/api/bootstrap', async c => {
@@ -35,7 +37,8 @@ app.get('/api/bootstrap', async c => {
 app.post('/api/auth/request', async c => {
   const body = await input(c); const email = clean(body.email,254).toLowerCase();
   if (!validEmail(email)) return jsonError(c,400,'メールアドレスを確認してください');
-  const existing = await c.env.DB.prepare('SELECT id FROM users WHERE email=?').bind(email).first();
+  const existing = await c.env.DB.prepare('SELECT id,disabled_at FROM users WHERE email=?').bind(email).first<{id:string;disabled_at:string|null}>();
+  if(existing?.disabled_at)return c.json({ok:true});
   let invitation = null;
   const inviteToken = clean(body.inviteToken,128);
   if (inviteToken) invitation = await c.env.DB.prepare('SELECT i.id FROM invitations i JOIN spaces s ON s.id=i.space_id AND s.archived=0 WHERE i.token_hash=? AND i.email=? AND i.expires_at>? AND i.accepted_at IS NULL').bind(await sha256(inviteToken),email,Date.now()).first();
@@ -55,6 +58,7 @@ app.post('/api/auth/request', async c => {
 app.post('/api/auth/verify', async c => {
   const body = await input(c); const email = clean(body.email,254).toLowerCase(); const code = clean(body.code,6);
   if (!validEmail(email) || !/^\d{6}$/.test(code)) return jsonError(c,400,'コードを確認してください');
+  if(await c.env.DB.prepare('SELECT 1 FROM users WHERE email=? AND disabled_at IS NOT NULL').bind(email).first())return jsonError(c,401,'コードが無効です');
   const row = await c.env.DB.prepare('SELECT code_hash,expires_at,attempts FROM login_codes WHERE email=?').bind(email).first<{code_hash:string;expires_at:number;attempts:number}>();
   if (!row || row.expires_at < Date.now() || row.attempts >= 5) return jsonError(c,401,'コードが無効です');
   await c.env.DB.prepare('UPDATE login_codes SET attempts=attempts+1 WHERE email=?').bind(email).run();
@@ -147,14 +151,14 @@ app.post('/api/channels/:id/mail-policy',async c=>{
 app.get('/api/users', async c => {
   const user=await viewer(c); if(!user) return jsonError(c,401,'ログインしてください');
   const ids=await spacesFor(c.env,user); if(!ids.length) return c.json({users:[]});
-  const rows=await c.env.DB.prepare(`SELECT DISTINCT u.id,u.name,u.role,u.affiliation FROM users u WHERE u.id=? OR u.role='admin' OR EXISTS(SELECT 1 FROM space_members sm WHERE sm.user_id=u.id AND sm.space_id IN (${ids.map(()=>'?').join(',')})) OR (u.role='member' AND EXISTS(SELECT 1 FROM spaces s WHERE s.all_members=1 AND s.id IN (${ids.map(()=>'?').join(',')})))`).bind(user.id,...ids,...ids).all();
+  const rows=await c.env.DB.prepare(`SELECT DISTINCT u.id,u.name,u.role,u.affiliation FROM users u WHERE u.disabled_at IS NULL AND (u.id=? OR u.role='admin' OR EXISTS(SELECT 1 FROM space_members sm WHERE sm.user_id=u.id AND sm.space_id IN (${ids.map(()=>'?').join(',')})) OR (u.role='member' AND EXISTS(SELECT 1 FROM spaces s WHERE s.all_members=1 AND s.id IN (${ids.map(()=>'?').join(',')}))))`).bind(user.id,...ids,...ids).all();
   return c.json({users:rows.results});
 });
 app.get('/api/spaces/:id/people',async c=>{
   const user=await viewer(c);if(!user)return jsonError(c,401,'ログインしてください');const spaceId=asId(c.req.param('id'));
   if(!(await spacesFor(c.env,user)).includes(spaceId))return jsonError(c,404,'スペースが見つかりません');
-  const rows=await c.env.DB.prepare("SELECT u.id,u.name,u.email,u.role,u.affiliation,CASE WHEN u.role='admin' THEN 'admin' WHEN sm.user_id IS NOT NULL THEN 'invited' ELSE 'all_members' END membership,CASE WHEN u.role<>'admin' AND sm.user_id IS NOT NULL AND NOT(s.all_members=1 AND u.role='member') THEN 1 ELSE 0 END removable FROM spaces s JOIN users u LEFT JOIN space_members sm ON sm.space_id=s.id AND sm.user_id=u.id WHERE s.id=? AND (u.role='admin' OR sm.user_id IS NOT NULL OR (s.all_members=1 AND u.role='member')) ORDER BY u.name,u.id").bind(spaceId).all<{id:string;name:string;email:string;role:string;affiliation:string|null;membership:string;removable:number}>();
-  const members=rows.results.map(row=>user.role==='admin'?{...row,canRemove:!!row.removable}:{id:row.id,name:row.name,role:row.role,affiliation:row.affiliation,membership:row.membership,canRemove:false});
+  const rows=await c.env.DB.prepare("SELECT u.id,u.name,u.email,u.role,u.affiliation,u.disabled_at,CASE WHEN u.role='admin' THEN 'admin' WHEN sm.user_id IS NOT NULL THEN 'invited' ELSE 'all_members' END membership,CASE WHEN u.role<>'admin' AND sm.user_id IS NOT NULL AND NOT(s.all_members=1 AND u.role='member') THEN 1 ELSE 0 END removable FROM spaces s JOIN users u LEFT JOIN space_members sm ON sm.space_id=s.id AND sm.user_id=u.id WHERE s.id=? AND (u.role='admin' OR sm.user_id IS NOT NULL OR (s.all_members=1 AND u.role='member')) ORDER BY u.name,u.id").bind(spaceId).all<{id:string;name:string;email:string;role:string;affiliation:string|null;membership:string;removable:number;disabled_at:string|null}>();
+  const members=rows.results.map(row=>user.role==='admin'?{...row,canRemove:!!row.removable}:{id:row.id,name:row.name,role:row.role,affiliation:row.affiliation,disabled_at:row.disabled_at,membership:row.membership,canRemove:false});
   const invitations=user.role==='admin'?(await c.env.DB.prepare('SELECT id,email,role,expires_at FROM invitations WHERE space_id=? AND accepted_at IS NULL ORDER BY expires_at DESC').bind(spaceId).all()).results:[];
   return c.json({members,invitations});
 });
@@ -174,6 +178,7 @@ app.post('/api/invitations', async c => {
   const body=await input(c); const email=clean(body.email,254).toLowerCase(); const spaceId=asId(body.spaceId);
   if(!validEmail(email)||!spaceId) return jsonError(c,400,'宛先とスペースが必要です');
   if(!(await spacesFor(c.env,user)).includes(spaceId)) return jsonError(c,403,'参加していないスペースです');
+  if(await c.env.DB.prepare('SELECT 1 FROM users WHERE email=? AND disabled_at IS NOT NULL').bind(email).first())return jsonError(c,409,'利用停止中です。管理者が再開してください');
   const role=body.role==='member'&&user.role==='admin'?'member':'guest'; const inviteToken=token(); const id=createId();
   await c.env.DB.prepare('INSERT INTO invitations(id,token_hash,email,role,space_id,expires_at) VALUES(?,?,?,?,?,?)').bind(id,await sha256(inviteToken),email,role,spaceId,Date.now()+604800000).run();
   const link=`${new URL(c.req.url).origin}/?invite=${encodeURIComponent(inviteToken)}&email=${encodeURIComponent(email)}`;
@@ -191,10 +196,12 @@ app.delete('/api/invitations/:id',async c=>{
 });
 
 export async function channelParticipants(env:Env, spaceId:string):Promise<string[]> {
-  const rows=await env.DB.prepare("SELECT DISTINCT u.id FROM users u LEFT JOIN space_members sm ON sm.user_id=u.id AND sm.space_id=? LEFT JOIN spaces s ON s.id=? WHERE u.role='admin' OR sm.user_id IS NOT NULL OR (s.all_members=1 AND u.role='member')").bind(spaceId,spaceId).all<{id:string}>();
+  const rows=await env.DB.prepare("SELECT DISTINCT u.id FROM users u LEFT JOIN space_members sm ON sm.user_id=u.id AND sm.space_id=? LEFT JOIN spaces s ON s.id=? WHERE u.disabled_at IS NULL AND (u.role='admin' OR sm.user_id IS NOT NULL OR (s.all_members=1 AND u.role='member'))").bind(spaceId,spaceId).all<{id:string}>();
   return rows.results.map(r=>r.id);
 }
 export async function emit(env:Env,userIds:string[],kind:string,messageId:string,channelId:string|null,dmId:string|null,notifyIds:string[]=[]):Promise<void> {
+  const active=await env.DB.prepare('SELECT id FROM users WHERE disabled_at IS NULL AND id IN (SELECT value FROM json_each(?))').bind(JSON.stringify(userIds)).all<{id:string}>();
+  userIds=active.results.map(r=>r.id);
   if(!userIds.length) return;
   const notified=new Set(notifyIds);
   if(channelId){
@@ -219,7 +226,7 @@ async function messageList(c:Context<Bindings>, column:'channel_id'|'dm_id', id:
   const before=asId(c.req.query('before')); const after=asId(c.req.query('after'));
   const condition=before?'AND m.id<?':after?'AND m.id>?':'';
   const order=after?'ASC':'DESC'; const args=[id,root]; if(before||after) args.push(before||after);
-  const rows=await c.env.DB.prepare(`SELECT m.*,(SELECT count(*) FROM messages replies WHERE replies.${column}=m.${column} AND replies.thread_root_id=m.id AND replies.deleted_at IS NULL) reply_count,u.name author_name,u.affiliation author_affiliation,(SELECT json_group_array(user_id) FROM message_addressees WHERE message_id=m.id) addressees,(SELECT json_group_object(user_id,status) FROM message_addressees WHERE message_id=m.id) addressee_status,(SELECT json_group_array(json_object('user_id',user_id,'kind',kind)) FROM reactions WHERE message_id=m.id) reactions,(SELECT json_group_array(json_object('id',id,'filename',filename,'bytes',bytes,'omitted',omitted)) FROM attachments WHERE message_id=m.id) attachment_list FROM messages m LEFT JOIN users u ON u.id=m.author_id WHERE m.${column}=? AND m.thread_root_id IS ? AND m.deleted_at IS NULL ${condition} ORDER BY m.id ${order} LIMIT 51`).bind(...args).all();
+  const rows=await c.env.DB.prepare(`SELECT m.*,(SELECT count(*) FROM messages replies WHERE replies.${column}=m.${column} AND replies.thread_root_id=m.id AND replies.deleted_at IS NULL) reply_count,u.name author_name,u.disabled_at author_disabled_at,u.affiliation author_affiliation,(SELECT json_group_array(user_id) FROM message_addressees WHERE message_id=m.id) addressees,(SELECT json_group_object(user_id,status) FROM message_addressees WHERE message_id=m.id) addressee_status,(SELECT json_group_array(json_object('user_id',user_id,'kind',kind)) FROM reactions WHERE message_id=m.id) reactions,(SELECT json_group_array(json_object('id',id,'filename',filename,'bytes',bytes,'omitted',omitted)) FROM attachments WHERE message_id=m.id) attachment_list FROM messages m LEFT JOIN users u ON u.id=m.author_id WHERE m.${column}=? AND m.thread_root_id IS ? AND m.deleted_at IS NULL ${condition} ORDER BY m.id ${order} LIMIT 51`).bind(...args).all();
   const hasMore=rows.results.length>50; const messages=rows.results.slice(0,50);
   if(!after) messages.reverse();
   const replyCount=root&&column==='channel_id'?(await c.env.DB.prepare('SELECT count(*) count FROM messages WHERE channel_id=? AND thread_root_id=? AND deleted_at IS NULL').bind(id,root).first<{count:number}>())?.count:null;
@@ -235,7 +242,7 @@ async function canAccessDm(env:Env,user:Viewer,dmId:string):Promise<boolean>{
 }
 app.get('/api/dms',async c=>{
   const user=await viewer(c);if(!user)return jsonError(c,401,'ログインしてください');
-  const rows=await c.env.DB.prepare('SELECT d.id,group_concat(u.name, ", ") names FROM dm_conversations d JOIN dm_members mine ON mine.dm_id=d.id AND mine.user_id=? JOIN dm_members others ON others.dm_id=d.id AND others.user_id<>? JOIN users u ON u.id=others.user_id GROUP BY d.id ORDER BY d.created_at DESC').bind(user.id,user.id).all<{id:string;names:string}>();
+  const rows=await c.env.DB.prepare('SELECT d.id,group_concat(u.name || CASE WHEN u.disabled_at IS NOT NULL THEN \'（停止中）\' ELSE \'\' END, ", ") names FROM dm_conversations d JOIN dm_members mine ON mine.dm_id=d.id AND mine.user_id=? JOIN dm_members others ON others.dm_id=d.id AND others.user_id<>? JOIN users u ON u.id=others.user_id GROUP BY d.id ORDER BY d.created_at DESC').bind(user.id,user.id).all<{id:string;names:string}>();
   const accessible=[];for(const row of rows.results)if(await canAccessDm(c.env,user,row.id))accessible.push(row);
   return c.json({dms:accessible});
 });
@@ -244,7 +251,7 @@ app.post('/api/dms',async c=>{
   const body=await input(c);const targetIds=Array.isArray(body.userIds)?[...new Set(body.userIds.map(asId).filter(Boolean))].filter(id=>id!==user.id):[];
   if(!targetIds.length||targetIds.length>4)return jsonError(c,400,'相手を1〜4人選択してください');
   const mine=await spacesFor(c.env,user);
-  for(const id of targetIds){const target=await c.env.DB.prepare('SELECT id,email,name,role,affiliation FROM users WHERE id=?').bind(id).first<Viewer>();
+  for(const id of targetIds){const target=await c.env.DB.prepare('SELECT id,email,name,role,affiliation FROM users WHERE id=? AND disabled_at IS NULL').bind(id).first<Viewer>();
     if(!target)return jsonError(c,404,'相手が見つかりません');
     if(user.role!=='admin'){const theirs=await spacesFor(c.env,target);if(!mine.some(s=>theirs.includes(s)))return jsonError(c,403,'共有スペースがありません');}
   }
@@ -318,7 +325,7 @@ app.get('/api/inbox',async c=>{
   const join=mentions?'JOIN message_mentions a ON a.message_id=m.id AND a.user_id=?':'LEFT JOIN message_addressees a ON a.message_id=m.id AND a.user_id=?';
   const clause=tab==='done'?"(a.status IN ('done','rejected') OR (m.author_id=? AND m.intent IS NOT NULL AND m.intent<>'INFO' AND m.status IN ('done','rejected')))":tab==='pending'?"a.status IN ('pending','thinking')":tab==='info'?"m.intent='INFO'":'1=1';
   const allowed=spaces.length?`ch.space_id IN (${spaces.map(()=>'?').join(',')})`:'0';
-  const rows=await c.env.DB.prepare(`SELECT m.*,u.name author_name,ch.name channel_name,s.name space_name,(SELECT json_group_array(user_id) FROM message_addressees WHERE message_id=m.id) addressees,(SELECT json_group_object(user_id,status) FROM message_addressees WHERE message_id=m.id) addressee_status,${mentions?'a.read_at':'NULL'} mention_read_at FROM messages m ${join} LEFT JOIN users u ON u.id=m.author_id LEFT JOIN channels ch ON ch.id=m.channel_id LEFT JOIN spaces s ON s.id=ch.space_id WHERE ${clause} AND m.deleted_at IS NULL AND ((ch.archived=0 AND ${allowed}) OR (m.dm_id IS NOT NULL AND EXISTS(SELECT 1 FROM dm_members dm WHERE dm.dm_id=m.dm_id AND dm.user_id=?))) ORDER BY (m.due_date IS NULL),m.due_date ASC,m.id DESC LIMIT 100`).bind(user.id,...(tab==='done'?[user.id]:[]),...spaces,user.id).all();
+  const rows=await c.env.DB.prepare(`SELECT m.*,u.name author_name,u.disabled_at author_disabled_at,ch.name channel_name,s.name space_name,(SELECT json_group_array(user_id) FROM message_addressees WHERE message_id=m.id) addressees,(SELECT json_group_object(user_id,status) FROM message_addressees WHERE message_id=m.id) addressee_status,${mentions?'a.read_at':'NULL'} mention_read_at FROM messages m ${join} LEFT JOIN users u ON u.id=m.author_id LEFT JOIN channels ch ON ch.id=m.channel_id LEFT JOIN spaces s ON s.id=ch.space_id WHERE ${clause} AND m.deleted_at IS NULL AND ((ch.archived=0 AND ${allowed}) OR (m.dm_id IS NOT NULL AND EXISTS(SELECT 1 FROM dm_members dm WHERE dm.dm_id=m.dm_id AND dm.user_id=?))) ORDER BY (m.due_date IS NULL),m.due_date ASC,m.id DESC LIMIT 100`).bind(user.id,...(tab==='done'?[user.id]:[]),...spaces,user.id).all();
   const visible=[];for(const row of rows.results)if(!row.dm_id||await canAccessDm(c.env,user,String(row.dm_id)))visible.push(row);
   return c.json({items:visible});
 });
@@ -409,7 +416,7 @@ app.get('/api/mail/received',async c=>{
   const spaceId=asId(c.req.query('spaceId'));
   if(!spaceId||!(await spacesFor(c.env,user)).includes(spaceId))return jsonError(c,404,'スペースが見つかりません');
   const before=asId(c.req.query('before'));
-  const rows=await c.env.DB.prepare(`SELECT m.*,u.name author_name,ch.name channel_name,s.name space_name,(SELECT json_group_array(user_id) FROM message_addressees WHERE message_id=m.id) addressees FROM messages m JOIN channels ch ON ch.id=m.channel_id JOIN spaces s ON s.id=ch.space_id LEFT JOIN users u ON u.id=m.author_id WHERE ch.space_id=? AND ch.archived=0 AND m.source='email' AND m.deleted_at IS NULL ${before?'AND m.id<?':''} ORDER BY m.id DESC LIMIT 51`).bind(...(before?[spaceId,before]:[spaceId])).all();
+  const rows=await c.env.DB.prepare(`SELECT m.*,u.name author_name,u.disabled_at author_disabled_at,ch.name channel_name,s.name space_name,(SELECT json_group_array(user_id) FROM message_addressees WHERE message_id=m.id) addressees FROM messages m JOIN channels ch ON ch.id=m.channel_id JOIN spaces s ON s.id=ch.space_id LEFT JOIN users u ON u.id=m.author_id WHERE ch.space_id=? AND ch.archived=0 AND m.source='email' AND m.deleted_at IS NULL ${before?'AND m.id<?':''} ORDER BY m.id DESC LIMIT 51`).bind(...(before?[spaceId,before]:[spaceId])).all();
   return c.json({items:rows.results.slice(0,50),cursor:rows.results.length>50?rows.results[49].id:null});
 });
 app.get('/api/mail/holds',async c=>{
@@ -445,3 +452,5 @@ app.post('/api/push/subscriptions',async c=>{
   await c.env.DB.prepare('INSERT INTO push_subscriptions(id,user_id,endpoint,p256dh,auth) VALUES(?,?,?,?,?) ON CONFLICT(endpoint) DO UPDATE SET user_id=excluded.user_id,p256dh=excluded.p256dh,auth=excluded.auth').bind(createId(),user.id,body.endpoint,body.keys.p256dh,body.keys.auth).run();
   return c.json({ok:true},201);
 });
+
+app.post('/api/admin/accounts/:id/:action',async c=>{const admin=await viewer(c);if(!admin)return jsonError(c,401,'ログインしてください');if(admin.role!=='admin')return jsonError(c,403,'管理者のみ操作できます');const action=c.req.param('action');if(!['disable','enable'].includes(action))return jsonError(c,404,'not_found');const target=await c.env.DB.prepare('SELECT email FROM users WHERE id=?').bind(c.req.param('id')).first<{email:string}>();if(!target||!hrmEmail(target.email))return jsonError(c,404,'not_found');const result=await changeAccount(c.env,target.email,action==='enable');return c.json(result,'error'in result?409:200)});

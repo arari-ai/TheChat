@@ -10,6 +10,7 @@ export class UserLive extends DurableObject<Env> {
       if(await this.ctx.storage.getAlarm()===null)await this.ctx.storage.setAlarm(Date.now()+300000);
       return Response.json({scheduled:true});
     }
+    if(new URL(request.url).pathname==='/revoke'){for(const socket of this.ctx.getWebSockets())socket.close(4001,'Account disabled');return Response.json({connections:0});}
     if (request.method === 'POST') {
       const payload = await request.text();
       for (const socket of this.ctx.getWebSockets()) {
@@ -29,7 +30,7 @@ export class UserLive extends DurableObject<Env> {
   async alarm(): Promise<void> {
     if(await this.ctx.storage.get("crm_delivery")){const next=await flushCrmOutbox(this.env);if(next!==null)await this.ctx.storage.setAlarm(next);return;}
     await sendDigests(this.env);
-    const pending=await this.env.DB.prepare('SELECT 1 FROM events e LEFT JOIN channels ch ON ch.id=e.channel_id LEFT JOIN spaces s ON s.id=ch.space_id WHERE e.notifiable=1 AND e.read_at IS NULL AND e.emailed_at IS NULL AND (e.channel_id IS NULL OR (ch.archived=0 AND s.archived=0)) LIMIT 1').first();
+    const pending=await this.env.DB.prepare('SELECT 1 FROM events e JOIN users u ON u.id=e.user_id LEFT JOIN channels ch ON ch.id=e.channel_id LEFT JOIN spaces s ON s.id=ch.space_id WHERE u.disabled_at IS NULL AND e.notifiable=1 AND e.read_at IS NULL AND e.emailed_at IS NULL AND (e.channel_id IS NULL OR (ch.archived=0 AND s.archived=0)) LIMIT 1').first();
     if(pending)await this.ctx.storage.setAlarm(Date.now()+300000);
   }
 }
