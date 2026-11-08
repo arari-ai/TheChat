@@ -11,7 +11,7 @@ export function validSubscription(value:unknown):value is PushSubscription {
 export async function sendPush(env:Env,userId:string):Promise<void>{
   if(!env.VAPID_PUBLIC_KEY||!env.VAPID_PRIVATE_KEY||!env.VAPID_SUBJECT)return;
   const vapid:VapidKeys={publicKey:env.VAPID_PUBLIC_KEY,privateKey:env.VAPID_PRIVATE_KEY,subject:env.VAPID_SUBJECT};
-  const rows=await env.DB.prepare('SELECT id,endpoint,p256dh,auth FROM push_subscriptions WHERE user_id=?').bind(userId).all<{id:string;endpoint:string;p256dh:string;auth:string}>();
+  const rows=await env.DB.prepare('SELECT id,endpoint,p256dh,auth FROM push_subscriptions WHERE user_id=? AND EXISTS(SELECT 1 FROM users WHERE users.id=user_id AND disabled_at IS NULL)').bind(userId).all<{id:string;endpoint:string;p256dh:string;auth:string}>();
   await Promise.allSettled(rows.results.map(async row=>{
     const subscription:PushSubscription={endpoint:row.endpoint,expirationTime:null,keys:{p256dh:row.p256dh,auth:row.auth}};
     const payload=await buildPushPayload({data:JSON.stringify({title:'TheChat',body:'新しい連絡があります',url:'/'}),options:{ttl:3600}},subscription,vapid);

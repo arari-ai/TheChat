@@ -11,5 +11,7 @@
   "fileTransferUrl": "https://files.example.com",
   "calendarUrl": "https://calendar.example.com",
   "emailProvider": "resend",
-  "emailCatchAll": false
+  "emailCatchAll": false,
+  "appOrigin": "https://chat.example.com",
+  "crmUrl": "https://crm.example.com"
 }

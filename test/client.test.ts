@@ -14,3 +14,6 @@ describe('composer and thread navigation', () => {
     expect(nextThreadState('same-root','same-root',['reply 1','reply 2'],'cursor')).toEqual({rootId:'same-root',messages:['reply 1','reply 2'],cursor:'cursor'});
   });
 });
+
+import {linkedChannel} from '../src/client/logic';
+it('opens only channels already returned by the authorized channel list',()=>{expect(linkedChannel('?channel=visible',[{id:'visible'}])).toBe('visible');expect(linkedChannel('?channel=hidden',[{id:'visible'}])).toBeNull();});
