@@ -1,0 +1,32 @@
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { readFile, writeFile } from 'node:fs/promises';
+
+const base=process.argv[2]||'http://127.0.0.1:8878';
+if(!['localhost','127.0.0.1'].includes(new URL(base).hostname))throw new Error('Local smoke test only accepts localhost');
+const cfg=JSON.parse(await readFile('wrangler.jsonc','utf8'));
+const db=cfg.d1_databases[0].database_name;
+function sql(command){execFileSync('node_modules/.bin/wrangler',['d1','execute',db,'--local','--config','wrangler.jsonc','--command',command],{stdio:'pipe'});}
+const stamp=Date.now();const admin=`smoke-admin-${stamp}`;const guest=`smoke-guest-${stamp}`;const secret=`local-smoke-${stamp}`;const guestSecret=`${secret}-guest`;
+const hash=createHash('sha256').update(secret).digest('hex');const guestHash=createHash('sha256').update(guestSecret).digest('hex');
+sql(`INSERT INTO users(id,email,name,role) VALUES('${admin}','smoke-${stamp}@example.com','管理者','admin'),('${guest}','guest-${stamp}@example.com','ゲスト','guest');INSERT INTO sessions(token_hash,user_id,expires_at) VALUES('${hash}','${admin}',${Date.now()+3600000}),('${guestHash}','${guest}',${Date.now()+3600000});`);
+const adminCookie=`thechat_session=${secret}`;
+async function request(path,options={},cookie=adminCookie){
+  const response=await fetch(base+path,{...options,headers:{cookie,'content-type':'application/json',...options.headers}});
+  const body=await response.json().catch(()=>null);return {status:response.status,body};
+}
+const space=await request('/api/spaces',{method:'POST',body:JSON.stringify({name:'検証スペース',allMembers:false})});assert.equal(space.status,201,JSON.stringify(space));
+const channel=await request('/api/channels',{method:'POST',body:JSON.stringify({spaceId:space.body.id,name:'検証'})});assert.equal(channel.status,201,JSON.stringify(channel));
+const forbidden=await request(`/api/channels/${channel.body.id}/messages`,{},`thechat_session=${guestSecret}`);assert.equal(forbidden.status,404);
+let firstId='';
+for(let n=0;n<51;n++){const posted=await request(`/api/channels/${channel.body.id}/messages`,{method:'POST',body:JSON.stringify({body:`投稿 ${n}`})});assert.equal(posted.status,201,JSON.stringify(posted));if(n===0)firstId=posted.body.id;}
+const page=await request(`/api/channels/${channel.body.id}/messages`);assert.equal(page.status,200);assert.equal(page.body.messages.length,50);assert.equal(page.body.hasMore,true);
+sql(`INSERT INTO message_addressees(message_id,user_id) VALUES('${firstId}','${guest}')`);
+const hiddenInbox=await request('/api/inbox',{},`thechat_session=${guestSecret}`);assert.equal(hiddenInbox.body.items.length,0,'A non-member must not see a former addressee item');
+const older=await request(`/api/channels/${channel.body.id}/messages?before=${page.body.cursor}`);assert.equal(older.status,200);assert.equal(older.body.messages.length,1);assert.equal(older.body.messages[0].id,firstId);
+const reply=await request(`/api/channels/${channel.body.id}/messages`,{method:'POST',body:JSON.stringify({body:'返信',threadRootId:firstId})});assert.equal(reply.status,201,JSON.stringify(reply));
+const thread=await request(`/api/channels/${channel.body.id}/messages?thread=${firstId}`);assert.equal(thread.body.messages.length,1);assert.equal(thread.body.messages[0].body,'返信');
+const live=await request('/api/live');assert.equal(live.status,426);
+await writeFile('.local-smoke-cookie',adminCookie,{mode:0o600});
+console.log('Local smoke passed: auth boundary, 51-message paging, thread reply, live upgrade');

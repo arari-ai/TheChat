@@ -1,0 +1,13 @@
+{
+  "organizationName": "Example Organization",
+  "domain": "example.com",
+  "adminEmail": "admin@example.com",
+  "mailFrom": "chat@example.com",
+  "workerName": "example-thechat",
+  "d1DatabaseName": "example-thechat-db",
+  "r2BucketName": "example-thechat-files",
+  "fileTransferUrl": "https://files.example.com",
+  "calendarUrl": "https://calendar.example.com",
+  "emailProvider": "resend",
+  "emailCatchAll": false
+}

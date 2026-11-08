@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.wrangler/
+wrangler.jsonc
+hub.config.json
+.dev.vars
+.env*
+*.log
+.DS_Store
+.local-*
+test-results/
+playwright-report/

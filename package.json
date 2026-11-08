@@ -1,0 +1,44 @@
+{
+  "name": "thechat",
+  "version": "1.0.0",
+  "description": "",
+  "scripts": {
+    "test": "vitest run",
+    "build": "vite build",
+    "check": "tsc --noEmit",
+    "dev": "vite --host 127.0.0.1",
+    "worker:dev": "wrangler dev --config wrangler.jsonc",
+    "config": "node scripts/config.mjs",
+    "deploy": "npm run build && wrangler deploy --config wrangler.jsonc"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/arari-ai/TheChat.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "UNLICENSED",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/arari-ai/TheChat/issues"
+  },
+  "homepage": "https://github.com/arari-ai/TheChat#readme",
+  "dependencies": {
+    "@block65/webcrypto-web-push": "^2.0.0",
+    "hono": "^4.13.17",
+    "postal-mime": "^4.2.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261108.1",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.2.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.6",
+    "vitest": "^4.1.12",
+    "wrangler": "^4.158.0"
+  },
+  "private": true
+}
