@@ -8,6 +8,9 @@ describe('composer and thread navigation', () => {
     expect(shouldSend({key:'Enter',ctrlKey:false,metaKey:false},true)).toBe(false);
   });
   it('clears the old thread cursor and messages on switch', () => {
-    expect(nextThreadState('new-root')).toEqual({rootId:'new-root',messages:[],cursor:null});
+    expect(nextThreadState('old-root','new-root',['old reply'],'old-cursor')).toEqual({rootId:'new-root',messages:[],cursor:null});
+  });
+  it('keeps replies when the same thread is opened again', () => {
+    expect(nextThreadState('same-root','same-root',['reply 1','reply 2'],'cursor')).toEqual({rootId:'same-root',messages:['reply 1','reply 2'],cursor:'cursor'});
   });
 });

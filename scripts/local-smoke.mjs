@@ -22,6 +22,9 @@ const notification=await request('/api/notification-settings');assert.equal(noti
 const changedNotification=await request('/api/notification-settings',{method:'POST',body:JSON.stringify({emailEnabled:false,emailDelayMinutes:30})});assert.equal(changedNotification.status,200);
 const changedChannel=await request(`/api/channels/${channel.body.id}/notification-settings`,{method:'POST',body:JSON.stringify({mode:'all'})});assert.equal(changedChannel.status,200);
 const mailPolicy=await request(`/api/channels/${channel.body.id}/mail-policy`,{method:'POST',body:JSON.stringify({policy:'allowlist',allowlist:['@example.com']})});assert.equal(mailPolicy.status,200);
+sql(`INSERT INTO mail_holds(id,channel_id,sender,reason) VALUES('smoke-hold-${stamp}','${channel.body.id}','sender@example.com','Authentication failed')`);
+const heldMail=await request(`/api/mail/holds?spaceId=${space.body.id}`);assert.equal(heldMail.status,200);assert.ok(heldMail.body.items.some(item=>item.channel_name==='検証'&&item.reason==='Authentication failed'));
+const guestHolds=await request(`/api/mail/holds?spaceId=${space.body.id}`,{},`thechat_session=${guestSecret}`);assert.equal(guestHolds.status,403);
 const forbidden=await request(`/api/channels/${channel.body.id}/messages`,{},`thechat_session=${guestSecret}`);assert.equal(forbidden.status,404);
 let firstId='';
 for(let n=0;n<51;n++){const posted=await request(`/api/channels/${channel.body.id}/messages`,{method:'POST',body:JSON.stringify({body:`投稿 ${n}`})});assert.equal(posted.status,201,JSON.stringify(posted));if(n===0)firstId=posted.body.id;}
@@ -74,6 +77,8 @@ const removedInbox=await request('/api/inbox?tab=done',{},`thechat_session=${gue
 const older=await request(`/api/channels/${channel.body.id}/messages?before=${page.body.cursor}`);assert.equal(older.status,200);assert.equal(older.body.messages.length,1);assert.equal(older.body.messages[0].id,firstId);
 const reply=await request(`/api/channels/${channel.body.id}/messages`,{method:'POST',body:JSON.stringify({body:'返信',threadRootId:firstId})});assert.equal(reply.status,201,JSON.stringify(reply));
 const thread=await request(`/api/channels/${channel.body.id}/messages?thread=${firstId}`);assert.equal(thread.body.messages.length,1);assert.equal(thread.body.messages[0].body,'返信');
+assert.equal(thread.body.replyCount,1);
+const rootWithReplies=await request(`/api/channels/${channel.body.id}/messages?before=${page.body.cursor}`);assert.equal(rootWithReplies.body.messages[0].reply_count,1);
 const live=await request('/api/live');assert.equal(live.status,426);
 const archivedChannel=await request(`/api/channels/${channel.body.id}/archive`,{method:'POST',body:JSON.stringify({archived:true})});assert.equal(archivedChannel.status,200);
 const guestArchive=await request(`/api/channels/${channel.body.id}/archive`,{method:'POST',body:JSON.stringify({archived:false})},`thechat_session=${guestSecret}`);assert.equal(guestArchive.status,403);

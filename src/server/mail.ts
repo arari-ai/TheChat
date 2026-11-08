@@ -12,8 +12,9 @@ export async function receiveMail(message:IncomingEmail,env:Env):Promise<void> {
   const channel=await env.DB.prepare('SELECT ch.id,ch.space_id,ch.mail_policy,ch.mail_allowlist FROM channels ch JOIN spaces s ON s.id=ch.space_id WHERE lower(ch.mail_address)=? AND ch.archived=0 AND s.archived=0').bind(message.to.toLowerCase()).first<{id:string;space_id:string;mail_policy:string;mail_allowlist:string}>();
   if(!channel) return;
   const auth=message.headers.get('Authentication-Results');
-  if(!trustedMail(auth)) {
-    await env.DB.prepare('INSERT INTO mail_holds(id,channel_id,sender,reason) VALUES(?,?,?,?)').bind(crypto.randomUUID(),channel.id,message.from,'SPF/DKIM/DMARC validation did not pass').run();
+  const parsed=await PostalMime.parse(message.raw,{attachmentEncoding:'arraybuffer'});
+  if(!trustedMail(auth,message.from,parsed.from?.address||null)) {
+    await env.DB.prepare('INSERT INTO mail_holds(id,channel_id,sender,reason) VALUES(?,?,?,?)').bind(crypto.randomUUID(),channel.id,message.from,'Email authentication failed or sender addresses differ').run();
     return;
   }
   if(channel.mail_policy==='allowlist') {
@@ -22,7 +23,6 @@ export async function receiveMail(message:IncomingEmail,env:Env):Promise<void> {
     const registered=await env.DB.prepare('SELECT id FROM users WHERE email=?').bind(sender).first();
     if(!registered&&!list.some(item=>item.startsWith('@')?sender.endsWith(item.toLowerCase()):sender===item.toLowerCase())) return;
   }
-  const parsed=await PostalMime.parse(message.raw,{attachmentEncoding:'arraybuffer'});
   if(parsed.messageId) {
     const duplicate=await env.DB.prepare('SELECT id FROM messages WHERE mail_message_id=?').bind(parsed.messageId).first();
     if(duplicate) return;

@@ -217,10 +217,11 @@ async function messageList(c:Context<Bindings>, column:'channel_id'|'dm_id', id:
   const before=asId(c.req.query('before')); const after=asId(c.req.query('after'));
   const condition=before?'AND m.id<?':after?'AND m.id>?':'';
   const order=after?'ASC':'DESC'; const args=[id,root]; if(before||after) args.push(before||after);
-  const rows=await c.env.DB.prepare(`SELECT m.*,u.name author_name,u.affiliation author_affiliation,(SELECT json_group_array(user_id) FROM message_addressees WHERE message_id=m.id) addressees,(SELECT json_group_object(user_id,status) FROM message_addressees WHERE message_id=m.id) addressee_status,(SELECT json_group_array(json_object('user_id',user_id,'kind',kind)) FROM reactions WHERE message_id=m.id) reactions,(SELECT json_group_array(json_object('id',id,'filename',filename,'bytes',bytes,'omitted',omitted)) FROM attachments WHERE message_id=m.id) attachment_list FROM messages m LEFT JOIN users u ON u.id=m.author_id WHERE m.${column}=? AND m.thread_root_id IS ? AND m.deleted_at IS NULL ${condition} ORDER BY m.id ${order} LIMIT 51`).bind(...args).all();
+  const rows=await c.env.DB.prepare(`SELECT m.*,(SELECT count(*) FROM messages replies WHERE replies.${column}=m.${column} AND replies.thread_root_id=m.id AND replies.deleted_at IS NULL) reply_count,u.name author_name,u.affiliation author_affiliation,(SELECT json_group_array(user_id) FROM message_addressees WHERE message_id=m.id) addressees,(SELECT json_group_object(user_id,status) FROM message_addressees WHERE message_id=m.id) addressee_status,(SELECT json_group_array(json_object('user_id',user_id,'kind',kind)) FROM reactions WHERE message_id=m.id) reactions,(SELECT json_group_array(json_object('id',id,'filename',filename,'bytes',bytes,'omitted',omitted)) FROM attachments WHERE message_id=m.id) attachment_list FROM messages m LEFT JOIN users u ON u.id=m.author_id WHERE m.${column}=? AND m.thread_root_id IS ? AND m.deleted_at IS NULL ${condition} ORDER BY m.id ${order} LIMIT 51`).bind(...args).all();
   const hasMore=rows.results.length>50; const messages=rows.results.slice(0,50);
   if(!after) messages.reverse();
-  return c.json({messages,hasMore,cursor:messages.length?messages[0].id:null});
+  const replyCount=root&&column==='channel_id'?(await c.env.DB.prepare('SELECT count(*) count FROM messages WHERE channel_id=? AND thread_root_id=? AND deleted_at IS NULL').bind(id,root).first<{count:number}>())?.count:null;
+  return c.json({messages,hasMore,cursor:messages.length?messages[0].id:null,...(replyCount===null?{}:{replyCount})});
 }
 async function canAccessDm(env:Env,user:Viewer,dmId:string):Promise<boolean>{
   if(!await env.DB.prepare('SELECT 1 FROM dm_members WHERE dm_id=? AND user_id=?').bind(dmId,user.id).first())return false;
@@ -407,7 +408,8 @@ app.get('/api/mail/received',async c=>{
 });
 app.get('/api/mail/holds',async c=>{
   const user=await viewer(c);if(!user)return jsonError(c,401,'ログインしてください');if(user.role!=='admin')return jsonError(c,403,'管理者のみ操作できます');
-  const rows=await c.env.DB.prepare('SELECT id,sender,subject,reason,received_at FROM mail_holds ORDER BY received_at DESC LIMIT 100').all();return c.json({items:rows.results});
+  const spaceId=asId(c.req.query('spaceId'));if(!spaceId)return jsonError(c,400,'スペースが必要です');
+  const rows=await c.env.DB.prepare('SELECT h.id,ch.name channel_name,h.sender,h.subject,h.reason,h.received_at FROM mail_holds h JOIN channels ch ON ch.id=h.channel_id WHERE ch.space_id=? ORDER BY h.received_at DESC LIMIT 100').bind(spaceId).all();return c.json({items:rows.results});
 });
 app.get('/api/config',async c=>{const user=await viewer(c);if(!user)return jsonError(c,401,'ログインしてください');const cfg=config(c.env);return c.json({organizationName:cfg.organizationName,version:'1.0.0',fileTransferUrl:cfg.fileTransferUrl,calendarUrl:cfg.calendarUrl});});
 app.get('/api/notification-settings',async c=>{
