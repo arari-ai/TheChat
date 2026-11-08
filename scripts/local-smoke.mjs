@@ -37,6 +37,15 @@ const pending=await request('/api/inbox?tab=pending',{},`thechat_session=${guest
 const response=await request(`/api/messages/${action.body.id}/respond`,{method:'POST',body:JSON.stringify({status:'done'})},`thechat_session=${guestSecret}`);assert.equal(response.status,200,JSON.stringify(response));
 const guestDone=await request('/api/inbox?tab=done',{},`thechat_session=${guestSecret}`);assert.equal(guestDone.body.items[0].id,action.body.id);
 const authorDone=await request('/api/inbox?tab=done');assert.equal(authorDone.body.items[0].id,action.body.id);
+const dm=await request('/api/dms',{method:'POST',body:JSON.stringify({userIds:[guest]})});assert.equal(dm.status,201);
+const guestDm=await request(`/api/dms/${dm.body.id}/messages`,{},`thechat_session=${guestSecret}`);assert.equal(guestDm.status,200);
+const dmAction=await request(`/api/dms/${dm.body.id}/messages`,{method:'POST',body:JSON.stringify({body:'DMで承認',intent:'SIGN'})});assert.equal(dmAction.status,201);
+const dmInbox=await request('/api/inbox?tab=pending',{},`thechat_session=${guestSecret}`);assert.ok(dmInbox.body.items.some(item=>item.id===dmAction.body.id));
+const dmResponse=await request(`/api/messages/${dmAction.body.id}/respond`,{method:'POST',body:JSON.stringify({status:'done'})},`thechat_session=${guestSecret}`);assert.equal(dmResponse.status,200);
+sql(`DELETE FROM space_members WHERE space_id='${space.body.id}' AND user_id='${guest}'`);
+const removedDm=await request(`/api/dms/${dm.body.id}/messages`,{},`thechat_session=${guestSecret}`);assert.equal(removedDm.status,404);
+const removedList=await request('/api/dms',{},`thechat_session=${guestSecret}`);assert.equal(removedList.body.dms.length,0);
+const removedInbox=await request('/api/inbox?tab=done',{},`thechat_session=${guestSecret}`);assert.ok(!removedInbox.body.items.some(item=>item.id===dmAction.body.id));
 const older=await request(`/api/channels/${channel.body.id}/messages?before=${page.body.cursor}`);assert.equal(older.status,200);assert.equal(older.body.messages.length,1);assert.equal(older.body.messages[0].id,firstId);
 const reply=await request(`/api/channels/${channel.body.id}/messages`,{method:'POST',body:JSON.stringify({body:'返信',threadRootId:firstId})});assert.equal(reply.status,201,JSON.stringify(reply));
 const thread=await request(`/api/channels/${channel.body.id}/messages?thread=${firstId}`);assert.equal(thread.body.messages.length,1);assert.equal(thread.body.messages[0].body,'返信');

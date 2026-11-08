@@ -175,12 +175,18 @@ async function messageList(c:Context<Bindings>, column:'channel_id'|'dm_id', id:
   return c.json({messages,hasMore,cursor:messages.length?messages[0].id:null});
 }
 async function canAccessDm(env:Env,user:Viewer,dmId:string):Promise<boolean>{
-  return !!await env.DB.prepare('SELECT 1 FROM dm_members WHERE dm_id=? AND user_id=?').bind(dmId,user.id).first();
+  if(!await env.DB.prepare('SELECT 1 FROM dm_members WHERE dm_id=? AND user_id=?').bind(dmId,user.id).first())return false;
+  if(user.role==='admin')return true;
+  const mine=await spacesFor(env,user);if(!mine.length)return false;
+  const others=await env.DB.prepare('SELECT u.id,u.email,u.name,u.role,u.affiliation FROM dm_members dm JOIN users u ON u.id=dm.user_id WHERE dm.dm_id=? AND dm.user_id<>?').bind(dmId,user.id).all<Viewer>();
+  for(const other of others.results){if(!(await spacesFor(env,other)).some(space=>mine.includes(space)))return false;}
+  return true;
 }
 app.get('/api/dms',async c=>{
   const user=await viewer(c);if(!user)return jsonError(c,401,'ログインしてください');
-  const rows=await c.env.DB.prepare('SELECT d.id,group_concat(u.name, ", ") names FROM dm_conversations d JOIN dm_members mine ON mine.dm_id=d.id AND mine.user_id=? JOIN dm_members others ON others.dm_id=d.id AND others.user_id<>? JOIN users u ON u.id=others.user_id GROUP BY d.id ORDER BY d.created_at DESC').bind(user.id,user.id).all();
-  return c.json({dms:rows.results});
+  const rows=await c.env.DB.prepare('SELECT d.id,group_concat(u.name, ", ") names FROM dm_conversations d JOIN dm_members mine ON mine.dm_id=d.id AND mine.user_id=? JOIN dm_members others ON others.dm_id=d.id AND others.user_id<>? JOIN users u ON u.id=others.user_id GROUP BY d.id ORDER BY d.created_at DESC').bind(user.id,user.id).all<{id:string;names:string}>();
+  const accessible=[];for(const row of rows.results)if(await canAccessDm(c.env,user,row.id))accessible.push(row);
+  return c.json({dms:accessible});
 });
 app.post('/api/dms',async c=>{
   const user=await viewer(c);if(!user)return jsonError(c,401,'ログインしてください');
@@ -258,7 +264,8 @@ app.get('/api/inbox',async c=>{
   const clause=tab==='done'?"(a.status IN ('done','rejected') OR (m.author_id=? AND m.intent IS NOT NULL AND m.intent<>'INFO' AND m.status IN ('done','rejected')))":tab==='pending'?"a.status IN ('pending','thinking')":tab==='info'?"m.intent='INFO'":'1=1';
   const allowed=spaces.length?`ch.space_id IN (${spaces.map(()=>'?').join(',')})`:'0';
   const rows=await c.env.DB.prepare(`SELECT m.*,u.name author_name,ch.name channel_name,s.name space_name,(SELECT json_group_array(user_id) FROM message_addressees WHERE message_id=m.id) addressees,(SELECT json_group_object(user_id,status) FROM message_addressees WHERE message_id=m.id) addressee_status,${mentions?'a.read_at':'NULL'} mention_read_at FROM messages m ${join} LEFT JOIN users u ON u.id=m.author_id LEFT JOIN channels ch ON ch.id=m.channel_id LEFT JOIN spaces s ON s.id=ch.space_id WHERE ${clause} AND m.deleted_at IS NULL AND (${allowed} OR (m.dm_id IS NOT NULL AND EXISTS(SELECT 1 FROM dm_members dm WHERE dm.dm_id=m.dm_id AND dm.user_id=?))) ORDER BY (m.due_date IS NULL),m.due_date ASC,m.id DESC LIMIT 100`).bind(user.id,...(tab==='done'?[user.id]:[]),...spaces,user.id).all();
-  return c.json({items:rows.results});
+  const visible=[];for(const row of rows.results)if(!row.dm_id||await canAccessDm(c.env,user,String(row.dm_id)))visible.push(row);
+  return c.json({items:visible});
 });
 app.get('/api/unread',async c=>{
   const user=await viewer(c);if(!user)return jsonError(c,401,'ログインしてください');
