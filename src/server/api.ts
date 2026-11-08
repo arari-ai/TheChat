@@ -106,6 +106,18 @@ app.post('/api/channels', async c => {
   await c.env.DB.prepare('INSERT INTO channels(id,space_id,name,mail_address) VALUES(?,?,?,?)').bind(id,spaceId,name,address).run();
   return c.json({id,name,spaceId,mailAddress:address},201);
 });
+app.get('/api/channels/:id/mail-policy',async c=>{
+  const user=await viewer(c);if(!user)return jsonError(c,401,'ログインしてください');const channel=await canAccessChannel(c.env,user,c.req.param('id'));if(!channel)return jsonError(c,404,'見つかりません');
+  const row=await c.env.DB.prepare('SELECT mail_address,mail_policy,mail_allowlist FROM channels WHERE id=?').bind(channel.id).first<{mail_address:string|null;mail_policy:string;mail_allowlist:string}>();
+  return c.json({address:row?.mail_address,policy:row?.mail_policy||'any',allowlist:JSON.parse(row?.mail_allowlist||'[]')});
+});
+app.post('/api/channels/:id/mail-policy',async c=>{
+  const user=await viewer(c);if(!user)return jsonError(c,401,'ログインしてください');if(user.role!=='admin')return jsonError(c,403,'管理者のみ操作できます');const channel=await canAccessChannel(c.env,user,c.req.param('id'));if(!channel)return jsonError(c,404,'見つかりません');
+  const body=await input(c);const policy=body.policy;if(!['any','allowlist'].includes(String(policy)))return jsonError(c,400,'受信設定を確認してください');
+  const allowlist=Array.isArray(body.allowlist)?body.allowlist.map(item=>clean(item,254).toLowerCase()):[];
+  if(allowlist.length>100||allowlist.some(item=>!validEmail(item)&&!/^@[a-z0-9.-]+\.[a-z]{2,}$/i.test(item)))return jsonError(c,400,'許可アドレスを確認してください');
+  await c.env.DB.prepare('UPDATE channels SET mail_policy=?,mail_allowlist=? WHERE id=?').bind(policy,JSON.stringify(allowlist),channel.id).run();return c.json({ok:true});
+});
 app.get('/api/users', async c => {
   const user=await viewer(c); if(!user) return jsonError(c,401,'ログインしてください');
   const ids=await spacesFor(c.env,user); if(!ids.length) return c.json({users:[]});
@@ -134,9 +146,18 @@ export async function channelParticipants(env:Env, spaceId:string):Promise<strin
 }
 export async function emit(env:Env,userIds:string[],kind:string,messageId:string,channelId:string|null,dmId:string|null,notifyIds:string[]=[]):Promise<void> {
   if(!userIds.length) return;
-  await env.DB.batch(userIds.map(id=>env.DB.prepare('INSERT INTO events(user_id,kind,message_id,channel_id,dm_id,notifiable) VALUES(?,?,?,?,?,?)').bind(id,kind,messageId,channelId,dmId,notifyIds.includes(id)?1:0)));
+  const notified=new Set(notifyIds);
+  if(channelId){
+    const settings=await env.DB.prepare('SELECT user_id,mode FROM channel_notification_settings WHERE channel_id=?').bind(channelId).all<{user_id:string;mode:string}>();
+    const author=await env.DB.prepare('SELECT author_id FROM messages WHERE id=?').bind(messageId).first<{author_id:string|null}>();
+    for(const setting of settings.results){
+      if(setting.mode==='none')notified.delete(setting.user_id);
+      if(setting.mode==='all'&&setting.user_id!==author?.author_id)notified.add(setting.user_id);
+    }
+  }
+  await env.DB.batch(userIds.map(id=>env.DB.prepare('INSERT INTO events(user_id,kind,message_id,channel_id,dm_id,notifiable) VALUES(?,?,?,?,?,?)').bind(id,kind,messageId,channelId,dmId,notified.has(id)?1:0)));
   const live=await Promise.allSettled(userIds.map(id=>env.LIVE.get(env.LIVE.idFromName(id)).fetch('https://live/event',{method:'POST',body:JSON.stringify({kind,messageId,channelId,dmId})})));
-  await Promise.allSettled(userIds.filter(id=>notifyIds.includes(id)).map(async id=>{
+  await Promise.allSettled(userIds.filter(id=>notified.has(id)).map(async id=>{
     const index=userIds.indexOf(id);const result=live[index];
     const count=result.status==='fulfilled'?(await result.value.json() as {connections:number}).connections:0;
     if(count===0)await sendPush(env,id);
@@ -215,7 +236,15 @@ app.post('/api/channels/:id/messages',async c=>{
   if(root){const threadPeople=await c.env.DB.prepare('SELECT DISTINCT author_id id FROM messages WHERE (id=? OR thread_root_id=?) AND author_id IS NOT NULL').bind(root,root).all<{id:string}>();for(const person of threadPeople.results)if(person.id!==user.id)notified.push(person.id);}
   const external=root?await c.env.DB.prepare('SELECT external_email,mail_subject,mail_message_id,mail_references FROM messages WHERE id=?').bind(root).first<{external_email:string|null;mail_subject:string|null;mail_message_id:string|null;mail_references:string|null}>():null;
   let emailSent=true;
-  if(external?.external_email){try{await sendMail(c.env,external.external_email,`Re: ${external.mail_subject||'TheChat'}`,parsed.body,{'In-Reply-To':external.mail_message_id||'','References':[external.mail_references,external.mail_message_id].filter(Boolean).join(' ')});}catch{emailSent=false;}}
+  if(external?.external_email){
+    const intentName:Record<Intent,string>={ACTION:'行動',SIGN:'承認',INFO:'情報',DECISION:'決断',REQUEST:'要求',COORD:'調整'};
+    const subject=`${intent?`【${intentName[intent]}】`:''}Re: ${external.mail_subject||'TheChat'}`;
+    const headers:Record<string,string>={};
+    if(external.mail_message_id)headers['In-Reply-To']=external.mail_message_id;
+    const references=[external.mail_references,external.mail_message_id].filter(Boolean).join(' ');
+    if(references)headers.References=references;
+    try{await sendMail(c.env,external.external_email,subject,parsed.body,headers);}catch{emailSent=false;}
+  }
   await emit(c.env,participants,'message',id,channel.id,null,notified);
   return c.json({id,body:parsed.body,intent,recipients,emailSent},201);
 });
@@ -223,11 +252,11 @@ app.get('/api/inbox',async c=>{
   const user=await viewer(c); if(!user)return jsonError(c,401,'ログインしてください');
   const spaces=await spacesFor(c.env,user);
   const tab=clean(c.req.query('tab'),20)||'pending';
-  let join='JOIN message_addressees a ON a.message_id=m.id AND a.user_id=?';
-  let clause=tab==='done'?"a.status IN ('done','rejected')":"a.status IN ('pending','thinking')";
-  if(tab==='mentions'||tab==='info'){join='JOIN message_mentions a ON a.message_id=m.id AND a.user_id=?';clause=tab==='info'?"m.intent='INFO'":'1=1';}
+  const mentions=tab==='mentions'||tab==='info';
+  const join=mentions?'JOIN message_mentions a ON a.message_id=m.id AND a.user_id=?':'LEFT JOIN message_addressees a ON a.message_id=m.id AND a.user_id=?';
+  const clause=tab==='done'?"(a.status IN ('done','rejected') OR (m.author_id=? AND m.intent IS NOT NULL AND m.intent<>'INFO' AND m.status IN ('done','rejected')))":tab==='pending'?"a.status IN ('pending','thinking')":tab==='info'?"m.intent='INFO'":'1=1';
   const allowed=spaces.length?`ch.space_id IN (${spaces.map(()=>'?').join(',')})`:'0';
-  const rows=await c.env.DB.prepare(`SELECT m.*,u.name author_name,ch.name channel_name,s.name space_name FROM messages m ${join} LEFT JOIN users u ON u.id=m.author_id LEFT JOIN channels ch ON ch.id=m.channel_id LEFT JOIN spaces s ON s.id=ch.space_id WHERE ${clause} AND m.deleted_at IS NULL AND (${allowed} OR (m.dm_id IS NOT NULL AND EXISTS(SELECT 1 FROM dm_members dm WHERE dm.dm_id=m.dm_id AND dm.user_id=?))) ORDER BY (m.due_date IS NULL),m.due_date ASC,m.id DESC LIMIT 100`).bind(user.id,...spaces,user.id).all();
+  const rows=await c.env.DB.prepare(`SELECT m.*,u.name author_name,ch.name channel_name,s.name space_name,(SELECT json_group_array(user_id) FROM message_addressees WHERE message_id=m.id) addressees,(SELECT json_group_object(user_id,status) FROM message_addressees WHERE message_id=m.id) addressee_status,${mentions?'a.read_at':'NULL'} mention_read_at FROM messages m ${join} LEFT JOIN users u ON u.id=m.author_id LEFT JOIN channels ch ON ch.id=m.channel_id LEFT JOIN spaces s ON s.id=ch.space_id WHERE ${clause} AND m.deleted_at IS NULL AND (${allowed} OR (m.dm_id IS NOT NULL AND EXISTS(SELECT 1 FROM dm_members dm WHERE dm.dm_id=m.dm_id AND dm.user_id=?))) ORDER BY (m.due_date IS NULL),m.due_date ASC,m.id DESC LIMIT 100`).bind(user.id,...(tab==='done'?[user.id]:[]),...spaces,user.id).all();
   return c.json({items:rows.results});
 });
 app.get('/api/unread',async c=>{
@@ -297,11 +326,45 @@ app.get('/api/attachments/:id',async c=>{
   const object=await c.env.FILES.get(row.r2_key);if(!object)return jsonError(c,404,'見つかりません');
   return new Response(object.body,{headers:{'Content-Type':row.media_type||'application/octet-stream','Content-Disposition':`attachment; filename*=UTF-8''${encodeURIComponent(row.filename)}`,'X-Content-Type-Options':'nosniff'}});
 });
+app.get('/api/messages/:id/original',async c=>{
+  const user=await viewer(c);if(!user)return jsonError(c,401,'ログインしてください');
+  const row=await c.env.DB.prepare('SELECT m.channel_id,m.dm_id,o.body FROM mail_originals o JOIN messages m ON m.id=o.message_id WHERE m.id=? AND m.deleted_at IS NULL').bind(c.req.param('id')).first<{channel_id:string|null;dm_id:string|null;body:string}>();
+  if(!row||row.channel_id&&!await canAccessChannel(c.env,user,row.channel_id)||row.dm_id&&!await canAccessDm(c.env,user,row.dm_id))return jsonError(c,404,'見つかりません');
+  return c.json({body:row.body});
+});
+app.get('/api/mail/received',async c=>{
+  const user=await viewer(c);if(!user)return jsonError(c,401,'ログインしてください');
+  const spaceId=asId(c.req.query('spaceId'));
+  if(!spaceId||!(await spacesFor(c.env,user)).includes(spaceId))return jsonError(c,404,'スペースが見つかりません');
+  const before=asId(c.req.query('before'));
+  const rows=await c.env.DB.prepare(`SELECT m.*,u.name author_name,ch.name channel_name,s.name space_name,(SELECT json_group_array(user_id) FROM message_addressees WHERE message_id=m.id) addressees FROM messages m JOIN channels ch ON ch.id=m.channel_id JOIN spaces s ON s.id=ch.space_id LEFT JOIN users u ON u.id=m.author_id WHERE ch.space_id=? AND m.source='email' AND m.deleted_at IS NULL ${before?'AND m.id<?':''} ORDER BY m.id DESC LIMIT 51`).bind(...(before?[spaceId,before]:[spaceId])).all();
+  return c.json({items:rows.results.slice(0,50),cursor:rows.results.length>50?rows.results[49].id:null});
+});
 app.get('/api/mail/holds',async c=>{
   const user=await viewer(c);if(!user)return jsonError(c,401,'ログインしてください');if(user.role!=='admin')return jsonError(c,403,'管理者のみ操作できます');
   const rows=await c.env.DB.prepare('SELECT id,sender,subject,reason,received_at FROM mail_holds ORDER BY received_at DESC LIMIT 100').all();return c.json({items:rows.results});
 });
 app.get('/api/config',async c=>{const user=await viewer(c);if(!user)return jsonError(c,401,'ログインしてください');const cfg=config(c.env);return c.json({organizationName:cfg.organizationName,version:'1.0.0',fileTransferUrl:cfg.fileTransferUrl,calendarUrl:cfg.calendarUrl});});
+app.get('/api/notification-settings',async c=>{
+  const user=await viewer(c);if(!user)return jsonError(c,401,'ログインしてください');
+  const row=await c.env.DB.prepare('SELECT email_enabled,email_delay_minutes FROM notification_settings WHERE user_id=?').bind(user.id).first<{email_enabled:number;email_delay_minutes:number}>();
+  return c.json({emailEnabled:row?.email_enabled!==0,emailDelayMinutes:row?.email_delay_minutes??15});
+});
+app.post('/api/notification-settings',async c=>{
+  const user=await viewer(c);if(!user)return jsonError(c,401,'ログインしてください');const body=await input(c);
+  const delay=Number(body.emailDelayMinutes);if(typeof body.emailEnabled!=='boolean'||!Number.isInteger(delay)||delay<0||delay>1440)return jsonError(c,400,'通知設定を確認してください');
+  await c.env.DB.prepare('INSERT INTO notification_settings(user_id,email_enabled,email_delay_minutes) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET email_enabled=excluded.email_enabled,email_delay_minutes=excluded.email_delay_minutes').bind(user.id,body.emailEnabled?1:0,delay).run();
+  return c.json({ok:true});
+});
+app.get('/api/channels/:id/notification-settings',async c=>{
+  const user=await viewer(c);if(!user)return jsonError(c,401,'ログインしてください');const channel=await canAccessChannel(c.env,user,c.req.param('id'));if(!channel)return jsonError(c,404,'見つかりません');
+  const row=await c.env.DB.prepare('SELECT mode FROM channel_notification_settings WHERE user_id=? AND channel_id=?').bind(user.id,channel.id).first<{mode:string}>();return c.json({mode:row?.mode||'mentions'});
+});
+app.post('/api/channels/:id/notification-settings',async c=>{
+  const user=await viewer(c);if(!user)return jsonError(c,401,'ログインしてください');const channel=await canAccessChannel(c.env,user,c.req.param('id'));if(!channel)return jsonError(c,404,'見つかりません');
+  const body=await input(c);if(!['all','mentions','none'].includes(String(body.mode)))return jsonError(c,400,'通知方法を確認してください');
+  await c.env.DB.prepare('INSERT INTO channel_notification_settings(user_id,channel_id,mode) VALUES(?,?,?) ON CONFLICT(user_id,channel_id) DO UPDATE SET mode=excluded.mode').bind(user.id,channel.id,body.mode).run();return c.json({ok:true});
+});
 app.get('/api/push/key',async c=>{const user=await viewer(c);if(!user)return jsonError(c,401,'ログインしてください');return c.json({publicKey:c.env.VAPID_PUBLIC_KEY||null});});
 app.post('/api/push/subscriptions',async c=>{
   const user=await viewer(c);if(!user)return jsonError(c,401,'ログインしてください');const body=await input(c);

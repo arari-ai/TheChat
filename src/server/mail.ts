@@ -33,7 +33,11 @@ export async function receiveMail(message:IncomingEmail,env:Env):Promise<void> {
   const parent=parentId?await env.DB.prepare('SELECT id,thread_root_id FROM messages WHERE mail_message_id=? AND channel_id=?').bind(parentId,channel.id).first<{id:string;thread_root_id:string|null}>():null;
   const id=await allocateMessageId(env); const subject=parsed.subject||'(件名なし)';
   const text=plainText(parsed.text||'')||subject;
-  await env.DB.prepare('INSERT INTO messages(id,channel_id,thread_root_id,author_id,external_name,external_email,body,source,source_id,mail_subject,mail_message_id,mail_references) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').bind(id,channel.id,parent?.thread_root_id||parent?.id||null,user?.id||null,user?null:parsed.from?.name||sender,sender,text,'email',parsed.messageId||null,subject,parsed.messageId||null,parsed.references||null).run();
+  const original=(parsed.text||parsed.html||'').slice(0,250000);
+  await env.DB.batch([
+    env.DB.prepare('INSERT INTO messages(id,channel_id,thread_root_id,author_id,external_name,external_email,body,source,source_id,mail_subject,mail_message_id,mail_references) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').bind(id,channel.id,parent?.thread_root_id||parent?.id||null,user?.id||null,user?null:parsed.from?.name||sender,user?null:sender,text,'email',parsed.messageId||null,subject,parsed.messageId||null,parsed.references||null),
+    env.DB.prepare('INSERT INTO mail_originals(message_id,body) VALUES(?,?)').bind(id,original)
+  ]);
   await env.DB.prepare('INSERT INTO messages_fts(body,message_id,channel_id) VALUES(?,?,?)').bind(text,id,channel.id).run();
   for(const part of parsed.attachments) {
     const filename=(part.filename||'attachment').slice(0,200);

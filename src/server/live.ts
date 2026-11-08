@@ -18,5 +18,5 @@ export class UserLive extends DurableObject<Env> {
   webSocketMessage(socket: WebSocket, message: string|ArrayBuffer): void {
     if (message === 'ping') socket.send('pong');
   }
-  webSocketClose(socket: WebSocket, code: number, reason: string): void { socket.close(code,reason); }
+  webSocketClose(): void { /* the runtime already closed the socket */ }
 }
