@@ -26,6 +26,9 @@ const forbidden=await request(`/api/channels/${channel.body.id}/messages`,{},`th
 let firstId='';
 for(let n=0;n<51;n++){const posted=await request(`/api/channels/${channel.body.id}/messages`,{method:'POST',body:JSON.stringify({body:`投稿 ${n}`})});assert.equal(posted.status,201,JSON.stringify(posted));if(n===0)firstId=posted.body.id;}
 const page=await request(`/api/channels/${channel.body.id}/messages`);assert.equal(page.status,200);assert.equal(page.body.messages.length,50);assert.equal(page.body.hasMore,true);
+const reaction=await request(`/api/messages/${firstId}/reactions`,{method:'POST',body:JSON.stringify({kind:'了解'})});assert.equal(reaction.status,200);assert.equal(reaction.body.active,true);
+const reacted=await request(`/api/channels/${channel.body.id}/messages?before=${page.body.cursor}`);assert.ok(JSON.parse(reacted.body.messages[0].reactions).some(item=>item.kind==='了解'&&item.user_id===admin));
+const reactionRemoved=await request(`/api/messages/${firstId}/reactions`,{method:'POST',body:JSON.stringify({kind:'了解'})});assert.equal(reactionRemoved.body.active,false);
 sql(`INSERT INTO message_addressees(message_id,user_id) VALUES('${firstId}','${guest}')`);
 const hiddenInbox=await request('/api/inbox',{},`thechat_session=${guestSecret}`);assert.equal(hiddenInbox.body.items.length,0,'A non-member must not see a former addressee item');
 sql(`INSERT INTO space_members(space_id,user_id) VALUES('${space.body.id}','${guest}')`);
@@ -33,6 +36,7 @@ sql(`UPDATE messages SET source='email',mail_subject='検証メール' WHERE id=
 const mailFeed=await request(`/api/mail/received?spaceId=${space.body.id}`,{},`thechat_session=${guestSecret}`);assert.equal(mailFeed.status,200);assert.equal(mailFeed.body.items[0].id,firstId);
 const original=await request(`/api/messages/${firstId}/original`,{},`thechat_session=${guestSecret}`);assert.equal(original.body.body,'元のメール全文');
 const action=await request(`/api/channels/${channel.body.id}/messages`,{method:'POST',body:JSON.stringify({body:'承認してください',intent:'SIGN',mentions:[guest]})});assert.equal(action.status,201,JSON.stringify(action));
+const notifications=await request('/api/notifications',{},`thechat_session=${guestSecret}`);assert.equal(notifications.status,200);assert.ok(notifications.body.items.some(item=>item.id===action.body.id));
 const pending=await request('/api/inbox?tab=pending',{},`thechat_session=${guestSecret}`);assert.equal(pending.status,200);assert.equal(pending.body.items[0].id,action.body.id);assert.deepEqual(JSON.parse(pending.body.items[0].addressees),[guest]);
 const response=await request(`/api/messages/${action.body.id}/respond`,{method:'POST',body:JSON.stringify({status:'done'})},`thechat_session=${guestSecret}`);assert.equal(response.status,200,JSON.stringify(response));
 const guestDone=await request('/api/inbox?tab=done',{},`thechat_session=${guestSecret}`);assert.equal(guestDone.body.items[0].id,action.body.id);
@@ -50,5 +54,18 @@ const older=await request(`/api/channels/${channel.body.id}/messages?before=${pa
 const reply=await request(`/api/channels/${channel.body.id}/messages`,{method:'POST',body:JSON.stringify({body:'返信',threadRootId:firstId})});assert.equal(reply.status,201,JSON.stringify(reply));
 const thread=await request(`/api/channels/${channel.body.id}/messages?thread=${firstId}`);assert.equal(thread.body.messages.length,1);assert.equal(thread.body.messages[0].body,'返信');
 const live=await request('/api/live');assert.equal(live.status,426);
+const archivedChannel=await request(`/api/channels/${channel.body.id}/archive`,{method:'POST',body:JSON.stringify({archived:true})});assert.equal(archivedChannel.status,200);
+const guestArchive=await request(`/api/channels/${channel.body.id}/archive`,{method:'POST',body:JSON.stringify({archived:false})},`thechat_session=${guestSecret}`);assert.equal(guestArchive.status,403);
+const hiddenChannel=await request('/api/spaces');assert.ok(!hiddenChannel.body.channels.some(item=>item.id===channel.body.id));
+const blockedPost=await request(`/api/channels/${channel.body.id}/messages`,{method:'POST',body:JSON.stringify({body:'不可'})});assert.equal(blockedPost.status,404);
+const hiddenNotification=await request('/api/notifications',{},`thechat_session=${guestSecret}`);assert.ok(!hiddenNotification.body.items.some(item=>item.id===action.body.id));
+const hiddenSearch=await request('/api/search?q=%E6%8A%95%E7%A8%BF');assert.ok(!hiddenSearch.body.items.some(item=>item.channel_id===channel.body.id));
+const archivedList=await request('/api/archives');assert.ok(archivedList.body.channels.some(item=>item.id===channel.body.id));
+const restoredChannel=await request(`/api/channels/${channel.body.id}/archive`,{method:'POST',body:JSON.stringify({archived:false})});assert.equal(restoredChannel.status,200);
+const archivedSpace=await request(`/api/spaces/${space.body.id}/archive`,{method:'POST',body:JSON.stringify({archived:true})});assert.equal(archivedSpace.status,200);
+const hiddenSpace=await request('/api/spaces');assert.ok(!hiddenSpace.body.spaces.some(item=>item.id===space.body.id));
+const blockedSpacePost=await request(`/api/channels/${channel.body.id}/messages`,{method:'POST',body:JSON.stringify({body:'不可'})});assert.equal(blockedSpacePost.status,404);
+const restoredSpace=await request(`/api/spaces/${space.body.id}/archive`,{method:'POST',body:JSON.stringify({archived:false})});assert.equal(restoredSpace.status,200);
+const restoredHistory=await request(`/api/channels/${channel.body.id}/messages`);assert.equal(restoredHistory.status,200);assert.ok(restoredHistory.body.messages.some(item=>item.id===action.body.id));
 await writeFile('.local-smoke-cookie',adminCookie,{mode:0o600});
-console.log('Local smoke passed: access, paging, thread, inbox, mail, settings and live guard');
+console.log('Local smoke passed: access, paging, reactions, notifications, archive/restore, thread, inbox, mail, settings and live guard');

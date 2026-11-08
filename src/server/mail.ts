@@ -9,7 +9,7 @@ function plainText(text:string):string {
   return text.replace(/\nOn .+ wrote:\s*$/s,'').replace(/\n>.*(?:\n>.*)*$/s,'').replace(/\n--\s*\n[\s\S]*$/,'').trim();
 }
 export async function receiveMail(message:IncomingEmail,env:Env):Promise<void> {
-  const channel=await env.DB.prepare('SELECT id,space_id,mail_policy,mail_allowlist FROM channels WHERE lower(mail_address)=? AND archived=0').bind(message.to.toLowerCase()).first<{id:string;space_id:string;mail_policy:string;mail_allowlist:string}>();
+  const channel=await env.DB.prepare('SELECT ch.id,ch.space_id,ch.mail_policy,ch.mail_allowlist FROM channels ch JOIN spaces s ON s.id=ch.space_id WHERE lower(ch.mail_address)=? AND ch.archived=0 AND s.archived=0').bind(message.to.toLowerCase()).first<{id:string;space_id:string;mail_policy:string;mail_allowlist:string}>();
   if(!channel) return;
   const auth=message.headers.get('Authentication-Results');
   if(!trustedMail(auth)) {

@@ -26,7 +26,7 @@ export class UserLive extends DurableObject<Env> {
   webSocketClose(): void { /* the runtime already closed the socket */ }
   async alarm(): Promise<void> {
     await sendDigests(this.env);
-    const pending=await this.env.DB.prepare('SELECT 1 FROM events WHERE notifiable=1 AND read_at IS NULL AND emailed_at IS NULL LIMIT 1').first();
+    const pending=await this.env.DB.prepare('SELECT 1 FROM events e LEFT JOIN channels ch ON ch.id=e.channel_id LEFT JOIN spaces s ON s.id=ch.space_id WHERE e.notifiable=1 AND e.read_at IS NULL AND e.emailed_at IS NULL AND (e.channel_id IS NULL OR (ch.archived=0 AND s.archived=0)) LIMIT 1').first();
     if(pending)await this.ctx.storage.setAlarm(Date.now()+300000);
   }
 }

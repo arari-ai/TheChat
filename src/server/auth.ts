@@ -29,13 +29,13 @@ export async function sendMail(env: Env, to: string, subject: string, text: stri
 }
 export async function spacesFor(env: Env, user: Viewer): Promise<string[]> {
   const query = user.role === 'admin'
-    ? 'SELECT id FROM spaces'
-    : "SELECT s.id FROM spaces s LEFT JOIN space_members sm ON sm.space_id=s.id AND sm.user_id=? WHERE sm.user_id IS NOT NULL OR (s.all_members=1 AND ?='member')";
+    ? 'SELECT id FROM spaces WHERE archived=0'
+    : "SELECT s.id FROM spaces s LEFT JOIN space_members sm ON sm.space_id=s.id AND sm.user_id=? WHERE s.archived=0 AND (sm.user_id IS NOT NULL OR (s.all_members=1 AND ?='member'))";
   const result = user.role === 'admin' ? await env.DB.prepare(query).all<{id:string}>() : await env.DB.prepare(query).bind(user.id,user.role).all<{id:string}>();
   return result.results.map(row=>row.id);
 }
 export async function canAccessChannel(env: Env, user: Viewer, channelId: string): Promise<{id:string;space_id:string;name:string}|null> {
   const channel = await env.DB.prepare('SELECT id,space_id,name FROM channels WHERE id=? AND archived=0').bind(channelId).first<{id:string;space_id:string;name:string}>();
   if (!channel) return null;
-  return user.role === 'admin' || (await spacesFor(env,user)).includes(channel.space_id) ? channel : null;
+  return (await spacesFor(env,user)).includes(channel.space_id) ? channel : null;
 }
