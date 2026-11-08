@@ -1,0 +1,27 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run check
+      - run: npm run build
+      - name: Check Cloudflare bundle
+        run: |
+          cat > hub.config.json <<'EOF'
+          {"organizationName":"Example","domain":"example.com","adminEmail":"admin@example.com","mailFrom":"chat@example.com","workerName":"thechat-example","d1DatabaseId":"00000000-0000-0000-0000-000000000001","r2BucketName":"thechat-example-files"}
+          EOF
+          npm run config
+          npx wrangler deploy --dry-run --config wrangler.jsonc
