@@ -15,3 +15,4 @@ describe('customer isolation', () => {
     expect(result).toHaveProperty('addresses',['inbox@inbox.example.com']);
   });
 });
+it('keeps an optional organization logo in generated config and rejects unsafe URLs',()=>{const base={organizationName:'Example',domain:'example.com',adminEmail:'admin@example.com',mailFrom:'chat@example.com',workerName:'example-chat',d1DatabaseId:'test-db',r2BucketName:'test-files'};expect(JSON.parse(buildWrangler({...base,logoUrl:'/arari-logo.svg'}).vars.HUB_CONFIG).logoUrl).toBe('/arari-logo.svg');expect(()=>buildWrangler({...base,logoUrl:'javascript:alert(1)'})).toThrow('logoUrl')});

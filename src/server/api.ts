@@ -30,7 +30,7 @@ app.route('/api/crm',crmApi);
 app.get('/api/health', c => c.json({ ok:true, version:'1.0.0' }));
 app.get('/api/bootstrap', async c => {
   const cfg = config(c.env);
-  return c.json({ organizationName:cfg.organizationName || 'TheChat', fileTransferUrl:cfg.fileTransferUrl || null, calendarUrl:cfg.calendarUrl || null, user:await viewer(c) });
+  return c.json({ logoOnDarkUrl:cfg.logoOnDarkUrl || null, logoUrl:cfg.logoUrl || null, organizationName:cfg.organizationName || 'TheChat', fileTransferUrl:cfg.fileTransferUrl || null, calendarUrl:cfg.calendarUrl || null, user:await viewer(c) });
 });
 app.post('/api/auth/request', async c => {
   const body = await input(c); const email = clean(body.email,254).toLowerCase();

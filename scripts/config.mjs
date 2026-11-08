@@ -11,7 +11,9 @@ export function buildWrangler(hub) {
     const parts=hub.emailRouteAddress.split('@');
     if (parts.length!==2 || !parts[0] || parts[0].includes('+') || parts[1]!==hub.domain) throw new Error('emailRouteAddress must be one literal address on domain');
   }
-  const publicHub = Object.fromEntries(['appOrigin','organizationName','domain','adminEmail','mailFrom','fileTransferUrl','calendarUrl','emailProvider','emailRouteAddress'].filter(key=>hub[key]!==undefined).map(key=>[key,hub[key]]));
+  if(hub.logoOnDarkUrl && !(hub.logoOnDarkUrl.startsWith('/')&&!hub.logoOnDarkUrl.startsWith('//')) && !/^https:\/\//.test(hub.logoOnDarkUrl))throw new Error('logoOnDarkUrl must use HTTPS or a local path');
+  if(hub.logoUrl && !(hub.logoUrl.startsWith('/')&&!hub.logoUrl.startsWith('//')) && !/^https:\/\//.test(hub.logoUrl))throw new Error('logoUrl must use HTTPS or a local path');
+  const publicHub = Object.fromEntries(['logoOnDarkUrl','logoUrl','appOrigin','organizationName','domain','adminEmail','mailFrom','fileTransferUrl','calendarUrl','emailProvider','emailRouteAddress'].filter(key=>hub[key]!==undefined).map(key=>[key,hub[key]]));
   const result = {
     $schema:'./node_modules/wrangler/config-schema.json',
     name:hub.workerName,

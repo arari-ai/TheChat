@@ -15,3 +15,8 @@
 @media(max-width:800px){.channel-header .notification-shortcut{display:none}.channel-header .menu-button{margin-left:auto}}
 .link-copy-status{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}.channel-link-dialog{width:min(520px,calc(100% - 32px));border:1px solid var(--line,#ddd);border-radius:16px;padding:24px;color:inherit;background:#fff}.channel-link-dialog::backdrop{background:#0006}.channel-link-dialog h2{font-size:20px;margin:0 0 12px}.channel-link-dialog p{line-height:1.7}.channel-link-dialog label{display:flex;flex-direction:column;gap:8px;margin:16px 0}.channel-link-dialog input{width:100%;padding:12px;font:inherit;border:1px solid #999;border-radius:8px}.channel-link-dialog>button{min-height:44px;padding:8px 20px;border:1px solid #999;border-radius:8px;background:#fff;font:inherit;cursor:pointer}
 .channel-header .channel-link-button{font-size:13px;white-space:nowrap;min-height:44px;padding:8px 10px}
+
+.organization-logo{display:block;object-fit:contain;margin:0 0 12px;max-width:100%;height:auto;}
+
+.mobile-organization-logo{display:none;}
+@media(max-width:800px){.mobile-organization-logo{display:block;object-fit:contain;margin:12px 20px;}}

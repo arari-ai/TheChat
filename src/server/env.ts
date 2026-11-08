@@ -1,6 +1,8 @@
 export interface HubConfig {
   appOrigin?: string;
   organizationName: string;
+  logoUrl?: string;
+  logoOnDarkUrl?: string;
   domain: string;
   adminEmail: string;
   mailFrom: string;
