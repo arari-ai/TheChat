@@ -43,3 +43,13 @@ npm run worker:dev
 Cloudflare Email RoutingのDNS、送信用ドメイン、通知鍵は導入先で有効化が必要です。Email RoutingはCloudflareが先頭に追加した `Authentication-Results` だけを信用します。認証に失敗したメールは管理者用の保留一覧に記録します。メール送信はCloudflare Email ServiceまたはResendを選べます。
 
 ライセンスは [MIT](LICENSE) です。
+
+## CRM連携（任意）
+
+導入設定に `appOrigin`（このTheChatのHTTPS公開URL）と `crmUrl`（CRMのHTTPS公開URL）を指定し、`npm run config` で反映します。Cloudflare Secret `CRM_TOKEN` とCRM側の `THECHAT_TOKEN` に同じ十分長い乱数を登録し、CRMの `integration_tokens` にSHA-256を保存してください。トークンを `hub.config.json` やGitに書かないでください。今回追加した `0006_crm.sql` のマイグレーションを適用します。
+
+CRMの案件画面でチャンネルを作成・選択すると、その後の新しい投稿とメールが同期されます。スペース・チャンネルの列挙や作成、紐付け、招待は `POST/GET /api/crm/*` で処理し、共通トークンに加えて担当者本人のTheChat内ロールと参加権限を確認します。顧客招待メールは利用者がCRMで送信を操作した場合だけ送ります。
+
+通常投稿と受信メールはメッセージと送信待ちを同じD1バッチで保存し、Durable ObjectのAlarmで配送します。返信メールは送信成功後に `mail_out`、送信失敗時は通常チャットとして記録します。CRM停止時は送信待ちを保持して再送し、復旧後も重複を作りません。CRMへ送るのは紐付けたチャンネルだけで、DMと過去の履歴は含みません。添付ファイルの本体はCRMへ転送しません。
+
+チャンネルの「リンク」でURLをコピーできます。`?channel=<id>` 付きURLを開くと、ログイン後に権限を確認して該当チャンネルへ移動します。

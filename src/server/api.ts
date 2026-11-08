@@ -1,3 +1,4 @@
+import {crmApi,crmOutboxStatement,scheduleCrmDelivery} from './crm';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { Env, HubConfig } from './env';
@@ -25,6 +26,7 @@ app.use('/api/*', async (c,next) => {
   }
   await next();
 });
+app.route('/api/crm',crmApi);
 app.get('/api/health', c => c.json({ ok:true, version:'1.0.0' }));
 app.get('/api/bootstrap', async c => {
   const cfg = config(c.env);
@@ -286,11 +288,13 @@ app.post('/api/channels/:id/messages',async c=>{
   const mentions=Array.isArray(body.mentions)?[...new Set(body.mentions.map(asId).filter(Boolean))].filter(id=>participants.includes(id)&&id!==user.id):[];
   const actionable=!!intent&&intent!=='INFO'; const recipients=actionable?(mentions.length?mentions:participants.filter(id=>id!==user.id)):[];
   const id=await allocateMessageId(c.env);
+  const external=root?await c.env.DB.prepare('SELECT external_email,mail_subject,mail_message_id,mail_references FROM messages WHERE id=?').bind(root).first<{external_email:string|null;mail_subject:string|null;mail_message_id:string|null;mail_references:string|null}>():null;
   const statements=[c.env.DB.prepare('INSERT INTO messages(id,channel_id,thread_root_id,author_id,body,intent,intent_source,due_date,broadcast) VALUES(?,?,?,?,?,?,?,?,?)').bind(id,channel.id,root,user.id,parsed.body,intent,intent?'human':null,due,actionable&&!mentions.length?1:0),c.env.DB.prepare('INSERT INTO messages_fts(body,message_id,channel_id) VALUES(?,?,?)').bind(parsed.body,id,channel.id),...recipients.map(uid=>c.env.DB.prepare('INSERT INTO message_addressees(message_id,user_id) VALUES(?,?)').bind(id,uid)),...mentions.map(uid=>c.env.DB.prepare('INSERT INTO message_mentions(message_id,user_id) VALUES(?,?)').bind(id,uid))];
+  if(!external?.external_email)statements.push(crmOutboxStatement(c.env,id,'message'));
   await c.env.DB.batch(statements);
+  if(!external?.external_email)c.executionCtx.waitUntil(scheduleCrmDelivery(c.env));
   const notified=[...new Set([...mentions,...recipients])];
   if(root){const threadPeople=await c.env.DB.prepare('SELECT DISTINCT author_id id FROM messages WHERE (id=? OR thread_root_id=?) AND author_id IS NOT NULL').bind(root,root).all<{id:string}>();for(const person of threadPeople.results)if(person.id!==user.id)notified.push(person.id);}
-  const external=root?await c.env.DB.prepare('SELECT external_email,mail_subject,mail_message_id,mail_references FROM messages WHERE id=?').bind(root).first<{external_email:string|null;mail_subject:string|null;mail_message_id:string|null;mail_references:string|null}>():null;
   let emailSent=true;
   if(external?.external_email){
     const intentName:Record<Intent,string>={ACTION:'行動',SIGN:'承認',INFO:'情報',DECISION:'決断',REQUEST:'要求',COORD:'調整'};
@@ -301,6 +305,8 @@ app.post('/api/channels/:id/messages',async c=>{
     if(references)headers.References=references;
     try{await sendMail(c.env,external.external_email,subject,parsed.body,headers);}catch{emailSent=false;}
   }
+  if(external?.external_email)await crmOutboxStatement(c.env,id,emailSent?'mail_out':'message',external.external_email).run();
+  c.executionCtx.waitUntil(scheduleCrmDelivery(c.env));
   await emit(c.env,participants,'message',id,channel.id,null,notified);
   return c.json({id,body:parsed.body,intent,recipients,emailSent},201);
 });

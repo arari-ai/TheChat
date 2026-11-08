@@ -1,4 +1,5 @@
 export interface HubConfig {
+  appOrigin?: string;
   organizationName: string;
   domain: string;
   adminEmail: string;
@@ -14,6 +15,8 @@ export interface Env {
   LIVE: DurableObjectNamespace;
   HUB_CONFIG: string;
   RESEND_API_KEY?: string;
+  CRM_URL?: string;
+  CRM_TOKEN?: string;
   EMAIL?: { send(message: { to: string; from: string; subject: string; text: string; headers?: Record<string,string> }): Promise<{ messageId: string }> };
   EVENTS_QUEUE?: Queue;
   ASSETS?: Fetcher;

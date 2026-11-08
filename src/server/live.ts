@@ -1,9 +1,11 @@
+import {flushCrmOutbox} from './crm';
 import { DurableObject } from 'cloudflare:workers';
 import type { Env } from './env';
 import { sendDigests } from './notifications';
 
 export class UserLive extends DurableObject<Env> {
   async fetch(request: Request): Promise<Response> {
+    if(new URL(request.url).pathname==='/crm/ensure'&&request.method==='POST'){await this.ctx.storage.put('crm_delivery',true);const next=Date.now()+1000;const alarm=await this.ctx.storage.getAlarm();if(alarm===null||alarm>next)await this.ctx.storage.setAlarm(next);return Response.json({scheduled:true});}
     if(new URL(request.url).pathname==='/digest/ensure'&&request.method==='POST') {
       if(await this.ctx.storage.getAlarm()===null)await this.ctx.storage.setAlarm(Date.now()+300000);
       return Response.json({scheduled:true});
@@ -25,6 +27,7 @@ export class UserLive extends DurableObject<Env> {
   }
   webSocketClose(): void { /* the runtime already closed the socket */ }
   async alarm(): Promise<void> {
+    if(await this.ctx.storage.get("crm_delivery")){const next=await flushCrmOutbox(this.env);if(next!==null)await this.ctx.storage.setAlarm(next);return;}
     await sendDigests(this.env);
     const pending=await this.env.DB.prepare('SELECT 1 FROM events e LEFT JOIN channels ch ON ch.id=e.channel_id LEFT JOIN spaces s ON s.id=ch.space_id WHERE e.notifiable=1 AND e.read_at IS NULL AND e.emailed_at IS NULL AND (e.channel_id IS NULL OR (ch.archived=0 AND s.archived=0)) LIMIT 1').first();
     if(pending)await this.ctx.storage.setAlarm(Date.now()+300000);
