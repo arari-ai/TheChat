@@ -6,7 +6,12 @@ export function buildWrangler(hub) {
     if (typeof hub[key] !== 'string' || !hub[key].trim()) throw new Error(`Missing ${key} in hub.config.json`);
   }
   if (!/^[a-z0-9-]+$/.test(hub.workerName)) throw new Error('workerName must use lowercase letters, digits and hyphens');
-  const publicHub = Object.fromEntries(['organizationName','domain','adminEmail','mailFrom','fileTransferUrl','calendarUrl','emailProvider'].filter(key=>hub[key]!==undefined).map(key=>[key,hub[key]]));
+  if (hub.emailRoutingEnabled && !hub.emailRouteAddress) throw new Error('emailRouteAddress is required when emailRoutingEnabled');
+  if (hub.emailRouteAddress) {
+    const parts=hub.emailRouteAddress.split('@');
+    if (parts.length!==2 || !parts[0] || parts[0].includes('+') || parts[1]!==hub.domain) throw new Error('emailRouteAddress must be one literal address on domain');
+  }
+  const publicHub = Object.fromEntries(['organizationName','domain','adminEmail','mailFrom','fileTransferUrl','calendarUrl','emailProvider','emailRouteAddress'].filter(key=>hub[key]!==undefined).map(key=>[key,hub[key]]));
   const result = {
     $schema:'./node_modules/wrangler/config-schema.json',
     name:hub.workerName,
@@ -24,7 +29,8 @@ export function buildWrangler(hub) {
   if (hub.vapidPublicKey) result.vars.VAPID_PUBLIC_KEY=hub.vapidPublicKey;
   if (hub.vapidSubject) result.vars.VAPID_SUBJECT=hub.vapidSubject;
   if (hub.customDomain) result.routes=[{pattern:hub.customDomain,custom_domain:true}];
-  if (hub.emailCatchAll) result.addresses=[`*@${hub.domain}`];
+  if (hub.emailRoutingEnabled && hub.emailRouteAddress) result.addresses=[hub.emailRouteAddress];
+  else if (hub.emailCatchAll) result.addresses=[`*@${hub.domain}`];
   if (hub.emailProvider==='cloudflare') result.send_email=[{name:'EMAIL'}];
   if (hub.eventsQueueName) result.queues={producers:[{binding:'EVENTS_QUEUE',queue:hub.eventsQueueName}]};
   return result;

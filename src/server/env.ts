@@ -6,6 +6,7 @@ export interface HubConfig {
   fileTransferUrl?: string;
   calendarUrl?: string;
   emailProvider?: 'cloudflare' | 'resend';
+  emailRouteAddress?: string;
 }
 export interface Env {
   DB: D1Database;

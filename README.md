@@ -36,4 +36,4 @@ npm run worker:dev
 
 Cloudflare Email RoutingのDNS、送信用ドメイン、通知鍵は導入先で有効化が必要です。Email RoutingはCloudflareが先頭に追加した `Authentication-Results` だけを信用します。認証に失敗したメールは管理者用の保留一覧に記録します。メール送信はCloudflare Email ServiceまたはResendを選べます。
 
-ライセンスはオーナーの決定待ちです。公開されているコードを閲覧できますが、再配布条件はまだ定めていません。
+ライセンスは [MIT](LICENSE) です。

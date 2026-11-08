@@ -10,4 +10,8 @@ describe('customer isolation', () => {
     expect(JSON.stringify(result)).not.toContain('apiKey');
     expect(result).not.toHaveProperty('triggers');
   });
+  it('routes one literal subdomain address when email routing is enabled', () => {
+    const result = buildWrangler({ organizationName:'Example', domain:'inbox.example.com', adminEmail:'admin@example.com', mailFrom:'chat@example.com', workerName:'example-chat', d1DatabaseId:'00000000-0000-0000-0000-000000000001', r2BucketName:'example-files', emailRouteAddress:'inbox@inbox.example.com', emailRoutingEnabled:true });
+    expect(result).toHaveProperty('addresses',['inbox@inbox.example.com']);
+  });
 });

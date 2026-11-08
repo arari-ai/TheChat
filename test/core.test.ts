@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseIntent, canSeeSpace, canContact, pageCursor, nextMessageId, canComplete } from '../src/shared/core';
+import { parseIntent, canSeeSpace, canContact, pageCursor, nextMessageId, canComplete, channelMailAddress } from '../src/shared/core';
 
 describe('message rules', () => {
   it('parses optional leading intent without forcing a tag', () => {
@@ -20,5 +20,8 @@ describe('message rules', () => {
     expect(canComplete('u2', ['u2'], 'ACTION')).toBe(true);
     expect(canComplete('u3', ['u2'], 'ACTION')).toBe(false);
     expect(canComplete('u2', ['u2'], 'INFO')).toBe(false);
+  });
+  it('maps channels to one literal routing address through subaddressing', () => {
+    expect(channelMailAddress('abc','inbox.example.com','inbox@inbox.example.com')).toBe('inbox+abc@inbox.example.com');
   });
 });

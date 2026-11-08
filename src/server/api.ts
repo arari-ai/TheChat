@@ -3,7 +3,7 @@ import type { Context } from 'hono';
 import type { Env, HubConfig } from './env';
 import { config } from './env';
 import { canAccessChannel, cookieName, getViewer, sendMail, sha256, spacesFor, token, type Viewer } from './auth';
-import { parseIntent, type Intent } from '../shared/core';
+import { channelMailAddress, parseIntent, type Intent } from '../shared/core';
 import { sendPush, validSubscription } from './push';
 import { allocateMessageId } from './db';
 
@@ -101,8 +101,8 @@ app.post('/api/channels', async c => {
   const body=await input(c); const spaceId=asId(body.spaceId); const name=clean(body.name,80);
   if(!spaceId||!name) return jsonError(c,400,'スペースと名前が必要です');
   if(!(await spacesFor(c.env,user)).includes(spaceId)) return jsonError(c,403,'参加していないスペースです');
-  const id=createId(); const domain=config(c.env).domain;
-  const address=domain?`channel-${id}@${domain}`:null;
+  const id=createId(); const cfg=config(c.env); const domain=cfg.domain;
+  const address=domain?channelMailAddress(id,domain,cfg.emailRouteAddress):null;
   await c.env.DB.prepare('INSERT INTO channels(id,space_id,name,mail_address) VALUES(?,?,?,?)').bind(id,spaceId,name,address).run();
   return c.json({id,name,spaceId,mailAddress:address},201);
 });

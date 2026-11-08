@@ -18,6 +18,10 @@ export function canContact(a: Principal, b: Principal): boolean {
 export function canComplete(userId: string, addressees: string[], intent: Intent | null): boolean {
   return !!intent && intent !== 'INFO' && addressees.includes(userId);
 }
+export function channelMailAddress(id: string, domain: string, routeAddress?: string): string {
+  const route=routeAddress?.split('@')[0];
+  return route?`${route}+${id}@${domain}`:`channel-${id}@${domain}`;
+}
 export function nextMessageId(now = Date.now(), random = Math.random): string {
   const time = now.toString(36).padStart(12, '0');
   const suffix = Math.floor(random() * 2 ** 32).toString(36).padStart(7, '0');

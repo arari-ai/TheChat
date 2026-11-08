@@ -3,6 +3,8 @@
   "domain": "example.com",
   "adminEmail": "admin@example.com",
   "mailFrom": "chat@example.com",
+  "emailRouteAddress": "inbox@example.com",
+  "emailRoutingEnabled": false,
   "workerName": "example-thechat",
   "d1DatabaseName": "example-thechat-db",
   "r2BucketName": "example-thechat-files",
