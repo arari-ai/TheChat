@@ -87,7 +87,7 @@ export function App(){
   async function createSpace(){const name=prompt('新しいスペース名');if(!name)return;try{await post('/api/spaces',{name});reload();}catch(e){setError((e as Error).message);}}
   async function createChannel(spaceId:string){const name=prompt('新しいチャンネル名');if(!name)return;try{await post('/api/channels',{spaceId,name});reload();}catch(e){setError((e as Error).message);}}
   async function invite(spaceId:string){const email=prompt('招待するメールアドレス');if(!email)return;try{await post('/api/invitations',{spaceId,email});alert('招待を送信しました');}catch(e){setError((e as Error).message);}}
-  async function logout(){await post('/api/auth/logout',{});setUser(null);setView('inbox');}
+  async function logout(){await post('/api/auth/logout',{});sessionStorage.removeItem('thechat-event-cursor');setUser(null);setView('inbox');}
   if(!boot)return <div className="loading">{error||'読み込み中…'}</div>;
   if(!user)return <Auth organizationName={boot.organizationName} onLogin={u=>setUser(u)}/>;
   const threadOpen=!!thread&&view==='thread';

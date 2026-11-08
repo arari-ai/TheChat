@@ -7,10 +7,12 @@ export function connectLive(onEvent:()=>void):()=>void {
   let cursor=Number(sessionStorage.getItem('thechat-event-cursor')||0);
   async function catchUp(){
     try{
-      for(let page=0;page<10;page++){
+      for(;;){
         const data=await api<{events:EventItem[]}>(`/api/events?after=${cursor}`);
         if(!data.events.length)break;
-        cursor=data.events.at(-1)!.id;sessionStorage.setItem('thechat-event-cursor',String(cursor));onEvent();
+        const next=data.events.at(-1)!.id;
+        if(next<=cursor)break;
+        cursor=next;sessionStorage.setItem('thechat-event-cursor',String(cursor));onEvent();
         if(data.events.length<200)break;
       }
     }catch{/* next connection retries */}
