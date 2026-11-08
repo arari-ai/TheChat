@@ -7,7 +7,7 @@ Cloudflare上に組織ごとに設置する、意図が伝わるチャットで�
 - React + Vite: 同一ドメインのPWA画面
 - Hono Worker: 認証、スペース権限、API、Email Routing受信、通知ジョブ
 - D1: 会話、ユーザー、既読、通知、添付ファイルのメタデータ
-- ユーザー別Durable Object: WebSocket配信。再接続時はD1のイベントログから取り直し
+- ユーザー別Durable Object: WebSocket配信。再接続時はD1のイベントログから取り直し。通知メールの遅延送信はDurable Object Alarmで実行
 - R2: メール添付ファイルのみ。ダウンロードは参加者を確認してから配信
 
 顧客固有の `hub.config.json`、生成した `wrangler.jsonc`、`.dev.vars`、認証情報、D1データはGit管理外です。公開リポジトリには顧客のアカウントIDを入れません。

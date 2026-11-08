@@ -156,6 +156,7 @@ export async function emit(env:Env,userIds:string[],kind:string,messageId:string
     }
   }
   await env.DB.batch(userIds.map(id=>env.DB.prepare('INSERT INTO events(user_id,kind,message_id,channel_id,dm_id,notifiable) VALUES(?,?,?,?,?,?)').bind(id,kind,messageId,channelId,dmId,notified.has(id)?1:0)));
+  if(notified.size){try{await env.LIVE.get(env.LIVE.idFromName('__digest__')).fetch('https://live/digest/ensure',{method:'POST'});}catch(error){console.error('Digest scheduler failed',error instanceof Error?error.message:'unknown error');}}
   const live=await Promise.allSettled(userIds.map(id=>env.LIVE.get(env.LIVE.idFromName(id)).fetch('https://live/event',{method:'POST',body:JSON.stringify({kind,messageId,channelId,dmId})})));
   await Promise.allSettled(userIds.filter(id=>notified.has(id)).map(async id=>{
     const index=userIds.indexOf(id);const result=live[index];

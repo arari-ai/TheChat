@@ -19,7 +19,6 @@ export function buildWrangler(hub) {
     migrations:[{tag:'v1',new_sqlite_classes:['UserLive']}],
     vars:{HUB_CONFIG:JSON.stringify(publicHub)},
     observability:{enabled:true},
-    triggers:{crons:['*/5 * * * *']},
   };
   if (hub.accountId) result.account_id=hub.accountId;
   if (hub.vapidPublicKey) result.vars.VAPID_PUBLIC_KEY=hub.vapidPublicKey;

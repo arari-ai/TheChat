@@ -8,5 +8,6 @@ describe('customer isolation', () => {
     expect(result.d1_databases[0].database_id).toBe('00000000-0000-0000-0000-000000000001');
     expect(result.vars.HUB_CONFIG).toContain('admin@example.com');
     expect(JSON.stringify(result)).not.toContain('apiKey');
+    expect(result).not.toHaveProperty('triggers');
   });
 });
