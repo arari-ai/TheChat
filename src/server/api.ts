@@ -36,7 +36,7 @@ app.post('/api/auth/request', async c => {
   const existing = await c.env.DB.prepare('SELECT id FROM users WHERE email=?').bind(email).first();
   let invitation = null;
   const inviteToken = clean(body.inviteToken,128);
-  if (inviteToken) invitation = await c.env.DB.prepare('SELECT id FROM invitations WHERE token_hash=? AND email=? AND expires_at>? AND accepted_at IS NULL').bind(await sha256(inviteToken),email,Date.now()).first();
+  if (inviteToken) invitation = await c.env.DB.prepare('SELECT i.id FROM invitations i JOIN spaces s ON s.id=i.space_id AND s.archived=0 WHERE i.token_hash=? AND i.email=? AND i.expires_at>? AND i.accepted_at IS NULL').bind(await sha256(inviteToken),email,Date.now()).first();
   const adminEmail = config(c.env).adminEmail?.toLowerCase();
   if (!existing && !invitation && email !== adminEmail) return c.json({ ok:true });
   const recent = await c.env.DB.prepare('SELECT requested_at FROM login_codes WHERE email=?').bind(email).first<{requested_at:number}>();
@@ -58,15 +58,20 @@ app.post('/api/auth/verify', async c => {
   await c.env.DB.prepare('UPDATE login_codes SET attempts=attempts+1 WHERE email=?').bind(email).run();
   if (row.code_hash !== await sha256(`${email}:${code}`)) return jsonError(c,401,'コードが無効です');
   let user = await c.env.DB.prepare('SELECT id,email,name,role,affiliation FROM users WHERE email=?').bind(email).first<Viewer>();
+  const inviteToken = clean(body.inviteToken,128);
+  const invitation = inviteToken ? await c.env.DB.prepare('SELECT i.id,i.role,i.space_id FROM invitations i JOIN spaces s ON s.id=i.space_id AND s.archived=0 WHERE i.token_hash=? AND i.email=? AND i.expires_at>? AND i.accepted_at IS NULL').bind(await sha256(inviteToken),email,Date.now()).first<{id:string;role:Viewer['role'];space_id:string}>() : null;
+  if(inviteToken&&!invitation)return jsonError(c,403,'招待リンクが無効か期限切れです');
   if (!user) {
     const admin = email === config(c.env).adminEmail?.toLowerCase();
-    const inviteToken = clean(body.inviteToken,128);
-    const invitation = inviteToken ? await c.env.DB.prepare('SELECT id,role,space_id FROM invitations WHERE token_hash=? AND email=? AND expires_at>? AND accepted_at IS NULL').bind(await sha256(inviteToken),email,Date.now()).first<{id:string;role:Viewer['role'];space_id:string|null}>() : null;
     if (!admin && !invitation) return jsonError(c,403,'招待が必要です');
     user = { id:createId(), email, name:clean(body.name,80)||email.split('@')[0], role:admin?'admin':invitation!.role, affiliation:null };
     const statements = [c.env.DB.prepare('INSERT INTO users(id,email,name,role) VALUES(?,?,?,?)').bind(user.id,user.email,user.name,user.role)];
     if (invitation?.space_id) statements.push(c.env.DB.prepare('INSERT INTO space_members(space_id,user_id) VALUES(?,?)').bind(invitation.space_id,user.id));
     if (invitation) statements.push(c.env.DB.prepare('UPDATE invitations SET accepted_at=? WHERE id=?').bind(Date.now(),invitation.id));
+    await c.env.DB.batch(statements);
+  } else if(invitation) {
+    const statements=[c.env.DB.prepare('INSERT OR IGNORE INTO space_members(space_id,user_id) VALUES(?,?)').bind(invitation.space_id,user.id),c.env.DB.prepare('UPDATE invitations SET accepted_at=? WHERE id=? AND accepted_at IS NULL').bind(Date.now(),invitation.id)];
+    if(invitation.role==='member'&&user.role==='guest'){statements.push(c.env.DB.prepare("UPDATE users SET role='member' WHERE id=?").bind(user.id));user={...user,role:'member'};}
     await c.env.DB.batch(statements);
   }
   await c.env.DB.prepare('DELETE FROM login_codes WHERE email=?').bind(email).run();
@@ -143,11 +148,30 @@ app.get('/api/users', async c => {
   const rows=await c.env.DB.prepare(`SELECT DISTINCT u.id,u.name,u.role,u.affiliation FROM users u WHERE u.id=? OR u.role='admin' OR EXISTS(SELECT 1 FROM space_members sm WHERE sm.user_id=u.id AND sm.space_id IN (${ids.map(()=>'?').join(',')})) OR (u.role='member' AND EXISTS(SELECT 1 FROM spaces s WHERE s.all_members=1 AND s.id IN (${ids.map(()=>'?').join(',')})))`).bind(user.id,...ids,...ids).all();
   return c.json({users:rows.results});
 });
+app.get('/api/spaces/:id/people',async c=>{
+  const user=await viewer(c);if(!user)return jsonError(c,401,'ログインしてください');const spaceId=asId(c.req.param('id'));
+  if(!(await spacesFor(c.env,user)).includes(spaceId))return jsonError(c,404,'スペースが見つかりません');
+  const rows=await c.env.DB.prepare("SELECT u.id,u.name,u.email,u.role,u.affiliation,CASE WHEN u.role='admin' THEN 'admin' WHEN sm.user_id IS NOT NULL THEN 'invited' ELSE 'all_members' END membership,CASE WHEN u.role<>'admin' AND sm.user_id IS NOT NULL AND NOT(s.all_members=1 AND u.role='member') THEN 1 ELSE 0 END removable FROM spaces s JOIN users u LEFT JOIN space_members sm ON sm.space_id=s.id AND sm.user_id=u.id WHERE s.id=? AND (u.role='admin' OR sm.user_id IS NOT NULL OR (s.all_members=1 AND u.role='member')) ORDER BY u.name,u.id").bind(spaceId).all<{id:string;name:string;email:string;role:string;affiliation:string|null;membership:string;removable:number}>();
+  const members=rows.results.map(row=>user.role==='admin'?{...row,canRemove:!!row.removable}:{id:row.id,name:row.name,role:row.role,affiliation:row.affiliation,membership:row.membership,canRemove:false});
+  const invitations=user.role==='admin'?(await c.env.DB.prepare('SELECT id,email,role,expires_at FROM invitations WHERE space_id=? AND accepted_at IS NULL ORDER BY expires_at DESC').bind(spaceId).all()).results:[];
+  return c.json({members,invitations});
+});
+app.delete('/api/spaces/:id/members/:userId',async c=>{
+  const user=await viewer(c);if(!user)return jsonError(c,401,'ログインしてください');if(user.role!=='admin')return jsonError(c,403,'管理者のみ操作できます');
+  const spaceId=asId(c.req.param('id'));const userId=asId(c.req.param('userId'));
+  if(!(await spacesFor(c.env,user)).includes(spaceId))return jsonError(c,404,'スペースが見つかりません');
+  const target=await c.env.DB.prepare('SELECT role FROM users WHERE id=?').bind(userId).first<{role:string}>();if(!target)return jsonError(c,404,'参加者が見つかりません');
+  if(target.role==='admin')return jsonError(c,403,'管理者はスペースから削除できません');
+  const space=await c.env.DB.prepare('SELECT all_members FROM spaces WHERE id=?').bind(spaceId).first<{all_members:number}>();
+  if(space?.all_members&&target.role==='member')return jsonError(c,409,'全メンバー参加のスペースではメンバーを個別に外せません');
+  const result=await c.env.DB.prepare('DELETE FROM space_members WHERE space_id=? AND user_id=?').bind(spaceId,userId).run();if(!result.meta.changes)return jsonError(c,404,'このスペースの参加者ではありません');
+  return c.json({ok:true});
+});
 app.post('/api/invitations', async c => {
   const user=await viewer(c); if(!user) return jsonError(c,401,'ログインしてください'); if(user.role==='guest') return jsonError(c,403,'招待できません');
   const body=await input(c); const email=clean(body.email,254).toLowerCase(); const spaceId=asId(body.spaceId);
   if(!validEmail(email)||!spaceId) return jsonError(c,400,'宛先とスペースが必要です');
-  if(user.role!=='admin'&&!(await spacesFor(c.env,user)).includes(spaceId)) return jsonError(c,403,'参加していないスペースです');
+  if(!(await spacesFor(c.env,user)).includes(spaceId)) return jsonError(c,403,'参加していないスペースです');
   const role=body.role==='member'&&user.role==='admin'?'member':'guest'; const inviteToken=token(); const id=createId();
   await c.env.DB.prepare('INSERT INTO invitations(id,token_hash,email,role,space_id,expires_at) VALUES(?,?,?,?,?,?)').bind(id,await sha256(inviteToken),email,role,spaceId,Date.now()+604800000).run();
   const link=`${new URL(c.req.url).origin}/?invite=${encodeURIComponent(inviteToken)}&email=${encodeURIComponent(email)}`;
@@ -157,6 +181,11 @@ app.post('/api/invitations', async c => {
     return jsonError(c,503,'メールを送信できませんでした');
   }
   return c.json({ok:true},201);
+});
+app.delete('/api/invitations/:id',async c=>{
+  const user=await viewer(c);if(!user)return jsonError(c,401,'ログインしてください');if(user.role!=='admin')return jsonError(c,403,'管理者のみ操作できます');
+  const result=await c.env.DB.prepare('DELETE FROM invitations WHERE id=? AND accepted_at IS NULL').bind(asId(c.req.param('id'))).run();if(!result.meta.changes)return jsonError(c,404,'招待が見つかりません');
+  return c.json({ok:true});
 });
 
 export async function channelParticipants(env:Env, spaceId:string):Promise<string[]> {

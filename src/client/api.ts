@@ -10,3 +10,5 @@ export type Channel={id:string;space_id:string;name:string;mail_address:string|n
 export type Message={id:string;channel_id:string|null;dm_id:string|null;thread_root_id:string|null;author_id:string|null;author_name:string|null;external_name:string|null;external_email:string|null;author_affiliation:string|null;body:string;intent:string|null;due_date:string|null;source:string;status:string;addressees:string;addressee_status:string;created_at:string;mail_subject:string|null;attachment_list?:string;reactions?:string};
 export type InboxItem=Message&{space_name:string;channel_name:string;addressee_status:string};
 export type NotificationItem=InboxItem&{event_id:number;kind:string};
+export type SpacePerson={id:string;name:string;email?:string;role:User['role'];affiliation:string|null;membership:'admin'|'invited'|'all_members';canRemove:boolean};
+export type PendingInvitation={id:string;email:string;role:'member'|'guest';expires_at:number};
