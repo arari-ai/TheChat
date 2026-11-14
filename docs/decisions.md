@@ -40,3 +40,8 @@ CRMの画面確認後の依頼に従い、従来の第1段階に案件連携を�
 
 ## 外部の人事・ID管理連携
 利用停止日時を追加し、既存セッション・通知・候補の境界で無効化する。最後の有効な管理者はD1トランザクション内で保護する。会話と未対応依頼は保持する。配備固有のキーは導入リポジトリで管理する。
+
+## Optional TheID SSO and external guests
+Explicit suite rollout request extends the original scope. TheID owns identity and employee grants; native users, admin/member/guest roles, space memberships and disabled state remain authoritative. Map only existing IDs through authenticated signed protocol, never email auto-merge or role inheritance. Optional local/hybrid/oidc modes retain standalone behavior; unmanaged native guests retain a separate entry even in oidc or incomplete provider setup. Mapping tombstones block old email/cookie login even after unlink. Authentication is checked before invitation mutations.
+
+Portable adapter0.1.2 uses only prefixed identity tables in the application's D1. A server-owned hashed session context is attached to each WebSocket and revalidated before every private broadcast and incoming ping. Old/missing attachments fail closed. Native logout/disabled state and provider revocation affect existing connections; client heartbeat checks idle sessions every30 seconds. No new Durable Object alarms or notification/CRM schedules. The full browser close handshake can remain CLOSING until peer reply; zero open server connections and no private output are enforced independently. New protocol endpoints run before assets; browser WebSocket handshakes require same origin. Native app logout clears both local app sessions, without signing out other apps.

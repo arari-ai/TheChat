@@ -4,6 +4,7 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { Env, HubConfig } from './env';
 import { config } from './env';
+import {nativeAllowed} from './identity';
 import { canAccessChannel, cookieName, getViewer, sendMail, sha256, spacesFor, token, type Viewer } from './auth';
 import { channelMailAddress, parseIntent, type Intent } from '../shared/core';
 import { sendPush, validSubscription } from './push';
@@ -32,13 +33,13 @@ app.route('/api/crm',crmApi);
 app.get('/api/health', c => c.json({ ok:true, version:'1.0.0' }));
 app.get('/api/bootstrap', async c => {
   const cfg = config(c.env);
-  return c.json({ logoOnDarkUrl:cfg.logoOnDarkUrl || null, logoUrl:cfg.logoUrl || null, organizationName:cfg.organizationName || 'TheChat', fileTransferUrl:cfg.fileTransferUrl || null, calendarUrl:cfg.calendarUrl || null, user:await viewer(c) });
+  return c.json({ logoOnDarkUrl:cfg.logoOnDarkUrl || null, logoUrl:cfg.logoUrl || null, organizationName:cfg.organizationName || 'TheChat', fileTransferUrl:cfg.fileTransferUrl || null, calendarUrl:cfg.calendarUrl || null, ssoEnabled:['hybrid','oidc'].includes(c.env.THEID_MODE||''), user:await viewer(c) });
 });
 app.post('/api/auth/request', async c => {
   const body = await input(c); const email = clean(body.email,254).toLowerCase();
   if (!validEmail(email)) return jsonError(c,400,'メールアドレスを確認してください');
-  const existing = await c.env.DB.prepare('SELECT id,disabled_at FROM users WHERE email=?').bind(email).first<{id:string;disabled_at:string|null}>();
-  if(existing?.disabled_at)return c.json({ok:true});
+  const existing = await c.env.DB.prepare('SELECT id,role,disabled_at FROM users WHERE email=?').bind(email).first<{id:string;role:string;disabled_at:string|null}>();
+  if(existing?.disabled_at || (existing && !(await nativeAllowed(c.env,existing.id,existing.role))))return c.json({ok:true});
   let invitation = null;
   const inviteToken = clean(body.inviteToken,128);
   if (inviteToken) invitation = await c.env.DB.prepare('SELECT i.id FROM invitations i JOIN spaces s ON s.id=i.space_id AND s.archived=0 WHERE i.token_hash=? AND i.email=? AND i.expires_at>? AND i.accepted_at IS NULL').bind(await sha256(inviteToken),email,Date.now()).first();
@@ -67,10 +68,12 @@ app.post('/api/auth/verify', async c => {
   const inviteToken = clean(body.inviteToken,128);
   const invitation = inviteToken ? await c.env.DB.prepare('SELECT i.id,i.role,i.space_id FROM invitations i JOIN spaces s ON s.id=i.space_id AND s.archived=0 WHERE i.token_hash=? AND i.email=? AND i.expires_at>? AND i.accepted_at IS NULL').bind(await sha256(inviteToken),email,Date.now()).first<{id:string;role:Viewer['role'];space_id:string}>() : null;
   if(inviteToken&&!invitation)return jsonError(c,403,'招待リンクが無効か期限切れです');
+  if(user && !(await nativeAllowed(c.env,user.id,invitation?.role==='member'&&user.role==='guest'?'member':user.role)))return jsonError(c,403,'社員の方はTheIDでログインしてください');
   if (!user) {
     const admin = email === config(c.env).adminEmail?.toLowerCase();
     if (!admin && !invitation) return jsonError(c,403,'招待が必要です');
     user = { id:createId(), email, name:clean(body.name,80)||email.split('@')[0], role:admin?'admin':invitation!.role, affiliation:null };
+    if(!(await nativeAllowed(c.env,user.id,user.role)))return jsonError(c,403,'社員の方はTheIDでログインしてください');
     const statements = [c.env.DB.prepare('INSERT INTO users(id,email,name,role) VALUES(?,?,?,?)').bind(user.id,user.email,user.name,user.role)];
     if (invitation?.space_id) statements.push(c.env.DB.prepare('INSERT INTO space_members(space_id,user_id) VALUES(?,?)').bind(invitation.space_id,user.id));
     if (invitation) statements.push(c.env.DB.prepare('UPDATE invitations SET accepted_at=? WHERE id=?').bind(Date.now(),invitation.id));
@@ -90,6 +93,9 @@ app.post('/api/auth/logout', async c => {
   const cookie = c.req.header('cookie')?.split(';').map(s=>s.trim()).find(s=>s.startsWith(`${cookieName}=`))?.slice(cookieName.length+1);
   if (cookie) await c.env.DB.prepare('DELETE FROM sessions WHERE token_hash=?').bind(await sha256(cookie)).run();
   c.header('Set-Cookie',`${cookieName}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+  const sso=c.req.header('cookie')?.split(';').map(s=>s.trim()).find(s=>s.startsWith('theid_session='))?.slice('theid_session='.length);
+  if(sso && (c.env.THEID_MODE??'local')!=='local')await c.env.DB.prepare('DELETE FROM theid_login_sessions WHERE id=?').bind(await sha256(sso)).run();
+  c.header('Set-Cookie','theid_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Secure',{append:true});
   return c.json({ ok:true });
 });
 app.get('/api/me', async c => { const user=await viewer(c); return user?c.json({user}):jsonError(c,401,'ログインしてください'); });

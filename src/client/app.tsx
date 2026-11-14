@@ -14,13 +14,13 @@ function NotificationBell(){
   return <svg className="notification-bell" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg>;
 }
 
-type Boot={logoOnDarkUrl?:string|null;logoUrl?:string|null;organizationName:string;fileTransferUrl:string|null;calendarUrl:string|null;user:User|null};
+type Boot={ssoEnabled?:boolean;logoOnDarkUrl?:string|null;logoUrl?:string|null;organizationName:string;fileTransferUrl:string|null;calendarUrl:string|null;user:User|null};
 
-function Auth({onLogin,organizationName,logoUrl}:{logoUrl?:string|null;onLogin:(user:User)=>void;organizationName:string}){
+export function Auth({onLogin,organizationName,logoUrl,ssoEnabled=false}:{ssoEnabled?:boolean;logoUrl?:string|null;onLogin:(user:User)=>void;organizationName:string}){
   const params=new URLSearchParams(location.search);const [email,setEmail]=useState(params.get('email')||'');const [code,setCode]=useState('');const [name,setName]=useState('');const [sent,setSent]=useState(false);const [busy,setBusy]=useState(false);const [error,setError]=useState('');
   const inviteToken=params.get('invite')||undefined;
   async function submit(event:React.FormEvent){event.preventDefault();setBusy(true);setError('');try{if(!sent){await post('/api/auth/request',{email,inviteToken});setSent(true);}else{const result=await post<{user:User}>('/api/auth/verify',{email,code,name,inviteToken});onLogin(result.user);}}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
-  return <main className="auth-shell"><div className="auth-card">{logoUrl&&<img className="organization-logo" src={logoUrl} alt={organizationName} width="119" height="35"/>}<div className="eyebrow">{organizationName}</div><h1>連絡を、はっきりと。</h1><p>メールに届くコードでログインします。</p><form onSubmit={submit}>{!sent?<label>メールアドレス<input type="email" autoComplete="email" required value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com"/></label>:<><label>6桁のコード<input inputMode="numeric" pattern="[0-9]{6}" autoComplete="one-time-code" required value={code} onChange={e=>setCode(e.target.value)}/></label>{inviteToken&&<label>表示名<input value={name} onChange={e=>setName(e.target.value)}/></label>}</>}{error&&<p className="error" role="alert">{error}</p>}<button className="primary" disabled={busy}>{sent?'ログイン':'コードを送る'}</button></form>{sent&&<button className="text-button" onClick={()=>setSent(false)}>メールアドレスを変える</button>}</div></main>;
+  return <main className="auth-shell"><div className="auth-card">{logoUrl&&<img className="organization-logo" src={logoUrl} alt={organizationName} width="119" height="35"/>}<div className="eyebrow">{organizationName}</div><h1>連絡を、はっきりと。</h1>{ssoEnabled&&<section className="employee-login"><h2>社員の方</h2><a className="sso-button" href="/api/auth/oidc/start">TheIDでログイン</a></section>}<p>{ssoEnabled?'ゲスト・単体利用の方はメールに届くコードでログインします。':'メールに届くコードでログインします。'}</p><form onSubmit={submit}>{!sent?<label>メールアドレス<input type="email" autoComplete="email" required value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com"/></label>:<><label>6桁のコード<input inputMode="numeric" pattern="[0-9]{6}" autoComplete="one-time-code" required value={code} onChange={e=>setCode(e.target.value)}/></label>{inviteToken&&<label>表示名<input value={name} onChange={e=>setName(e.target.value)}/></label>}</>}{error&&<p className="error" role="alert">{error}</p>}<button className="primary" disabled={busy}>{sent?'ログイン':'コードを送る'}</button></form>{sent&&<button className="text-button" onClick={()=>setSent(false)}>メールアドレスを変える</button>}</div></main>;
 }
 
 function Body({text}:{text:string}){
@@ -150,7 +150,7 @@ export function App(){
   async function archiveChannel(){if(!channel)return;if(!confirm(`チャンネル「${channel.name}」をアーカイブしますか？投稿・メール受信が停止します。`))return;await post(`/api/channels/${channel.id}/archive`,{archived:true});setSettingsOpen(false);setChannel(null);setThread(null);setView('home');reload();}
   async function logout(){await post('/api/auth/logout',{});sessionStorage.removeItem('thechat-event-cursor');setUser(null);setView('inbox');}
   if(!boot)return <div className="loading">{error||'読み込み中…'}</div>;
-  if(!user)return <Auth logoUrl={boot.logoUrl} organizationName={boot.organizationName} onLogin={u=>setUser(u)}/>;
+  if(!user)return <Auth ssoEnabled={boot.ssoEnabled} logoUrl={boot.logoUrl} organizationName={boot.organizationName} onLogin={u=>setUser(u)}/>;
   const threadOpen=!!thread&&view==='thread';
   const threadAddressees=thread?JSON.parse(thread.addressees||'[]') as string[]:[];
   const canRespond=thread&&actionable(thread.intent)&&threadAddressees.includes(user.id)&&!['done','rejected'].includes(thread.status);

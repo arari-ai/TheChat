@@ -16,3 +16,10 @@ describe('customer isolation', () => {
   });
 });
 it('keeps an optional organization logo in generated config and rejects unsafe URLs',()=>{const base={organizationName:'Example',domain:'example.com',adminEmail:'admin@example.com',mailFrom:'chat@example.com',workerName:'example-chat',d1DatabaseId:'test-db',r2BucketName:'test-files'};expect(JSON.parse(buildWrangler({...base,logoUrl:'/arari-logo.svg'}).vars.HUB_CONFIG).logoUrl).toBe('/arari-logo.svg');expect(()=>buildWrangler({...base,logoUrl:'javascript:alert(1)'})).toThrow('logoUrl')});
+it('keeps optional identity settings separate from public bootstrap and routes protocol to worker',()=>{
+ const hub={organizationName:'Example',domain:'example.com',adminEmail:'admin@example.com',mailFrom:'chat@example.com',workerName:'example-chat',d1DatabaseId:'test-db',r2BucketName:'test-files',appOrigin:'https://chat.example.com',theid:{mode:'hybrid',issuer:'https://id.example.com/api/auth',clientId:'fixture',appId:'chat'}};
+ const cfg=buildWrangler(hub) as any;
+ expect(cfg.vars.THEID_MODE).toBe('hybrid');expect(cfg.vars.THEID_CLIENT_ID).toBe('fixture');
+ expect(cfg.vars.HUB_CONFIG).not.toContain('clientId');expect(cfg.assets.run_worker_first).toContain('/_theid/*');
+ expect(()=>buildWrangler({...hub,theid:{...hub.theid,clientSecret:'DO NOT STORE'}})).toThrow();
+});

@@ -1,4 +1,5 @@
 import { app } from './api';
+import {identityRoute} from './identity';
 import { getViewer } from './auth';
 import { receiveMail, type IncomingEmail } from './mail';
 import { UserLive } from './live';
@@ -9,9 +10,12 @@ export { UserLive };
 export default {
   async fetch(request:Request,env:Env,ctx:ExecutionContext):Promise<Response> {
     const url=new URL(request.url);
+    const handled=await identityRoute(request,env);
+    if(handled)return handled;
     if(url.pathname==='/api/live') {
       const user=await getViewer(request,env);
       if(!user)return new Response('Unauthorized',{status:401});
+      if(request.headers.get('Origin')!==url.origin)return new Response('Forbidden',{status:403});
       if(request.headers.get('Upgrade')?.toLowerCase()!=='websocket')return new Response('Upgrade required',{status:426});
       return env.LIVE.get(env.LIVE.idFromName(user.id)).fetch(request);
     }
