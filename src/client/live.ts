@@ -3,7 +3,7 @@ import { api } from './api';
 
 type EventItem={id:number;kind:string;messageId:string;channelId:string|null;dmId:string|null};
 export function connectLive(onEvent:()=>void):()=>void {
-  let stopped=false,attempt=0,socket:WebSocket|null=null,timer=0;
+  let stopped=false,attempt=0,socket:WebSocket|null=null,timer=0,heartbeat=0;
   let cursor=Number(sessionStorage.getItem('thechat-event-cursor')||0);
   async function catchUp(){
     try{
@@ -22,13 +22,13 @@ export function connectLive(onEvent:()=>void):()=>void {
     catchUp();
     const current=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/api/live`);
     socket=current;
-    current.onopen=()=>{attempt=0;catchUp();};
-    current.onmessage=()=>{catchUp();};
-    current.onclose=()=>{if(!stopped&&socket===current)timer=window.setTimeout(open,retryDelay(attempt++));};
+    current.onopen=()=>{attempt=0;window.clearInterval(heartbeat);heartbeat=window.setInterval(()=>{if(current.readyState===WebSocket.OPEN)current.send('ping');},30000);catchUp();};
+    current.onmessage=event=>{if(event.data!=='pong')catchUp();};
+    current.onclose=()=>{window.clearInterval(heartbeat);if(!stopped&&socket===current)timer=window.setTimeout(open,retryDelay(attempt++));};
     current.onerror=()=>current.close();
   }
   open();
   const online=()=>{if(socket?.readyState!==WebSocket.OPEN){window.clearTimeout(timer);const old=socket;socket=null;old?.close();open();}else catchUp();};
   window.addEventListener('online',online);document.addEventListener('visibilitychange',online);
-  return ()=>{stopped=true;window.clearTimeout(timer);socket?.close();window.removeEventListener('online',online);document.removeEventListener('visibilitychange',online);};
+  return ()=>{stopped=true;window.clearInterval(heartbeat);window.clearTimeout(timer);socket?.close();window.removeEventListener('online',online);document.removeEventListener('visibilitychange',online);};
 }

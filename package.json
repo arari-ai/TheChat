@@ -24,6 +24,7 @@
   },
   "homepage": "https://github.com/arari-ai/TheChat#readme",
   "dependencies": {
+    "@arari/theid-rp": "file:vendor/arari-theid-rp-0.1.2.tgz",
     "@block65/webcrypto-web-push": "^2.0.0",
     "hono": "^4.13.17",
     "postal-mime": "^4.2.0",
@@ -36,6 +37,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.2.1",
+    "esbuild": "^0.28.2",
     "miniflare": "^5.20261104.0-beta",
     "typescript": "^7.0.2",
     "vite": "^8.3.6",

@@ -16,6 +16,13 @@ export interface Env {
   FILES: R2Bucket;
   LIVE: DurableObjectNamespace;
   HUB_CONFIG: string;
+  THEID_MODE?: 'local'|'hybrid'|'oidc';
+  THEID_ISSUER?: string;
+  THEID_CLIENT_ID?: string;
+  THEID_APP_ID?: string;
+  THEID_CLIENT_SECRET?: string;
+  THEID_AUTH_POLICY?: 'standard'|'mfa';
+  LOCAL_AUTH?: string;
   RESEND_API_KEY?: string;
   HRM_TOKEN?: string;
   CRM_URL?: string;

@@ -1,3 +1,4 @@
+import {authorizeConnection,getConnection,type ConnectionContext} from './auth';
 import {flushCrmOutbox} from './crm';
 import { DurableObject } from 'cloudflare:workers';
 import type { Env } from './env';
@@ -14,19 +15,27 @@ export class UserLive extends DurableObject<Env> {
     if (request.method === 'POST') {
       const payload = await request.text();
       for (const socket of this.ctx.getWebSockets()) {
-        try { socket.send(payload); } catch { /* an expired socket is removed by the runtime */ }
+        try { if(await this.authorized(socket))socket.send(payload); } catch { /* an expired socket is removed by the runtime */ }
       }
-      return Response.json({connections:this.ctx.getWebSockets().length});
+      return Response.json({connections:this.ctx.getWebSockets().filter(socket=>socket.readyState===1).length});
     }
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return new Response('Upgrade required',{status:426});
+    const connection=await getConnection(request,this.env);
+    if(!connection || this.ctx.id.toString()!==this.env.LIVE.idFromName(connection.user.id).toString())return new Response('Unauthorized',{status:401});
     const pair = new WebSocketPair(); const [client,server] = Object.values(pair);
     this.ctx.acceptWebSocket(server);
+    server.serializeAttachment(connection.context);
     return new Response(null,{status:101,webSocket:client});
   }
-  webSocketMessage(socket: WebSocket, message: string|ArrayBuffer): void {
-    if (message === 'ping') socket.send('pong');
+  private async authorized(socket:WebSocket):Promise<boolean> {
+    try{if(await authorizeConnection(socket.deserializeAttachment() as ConnectionContext,this.env))return true;}catch{/* fail closed for missing/old attachment or identity outage beyond lease */}
+    try{socket.close(4001,'Session ended');}catch{/* already closed */}
+    return false;
   }
-  webSocketClose(): void { /* the runtime already closed the socket */ }
+  async webSocketMessage(socket: WebSocket, message: string|ArrayBuffer): Promise<void> {
+    if(await this.authorized(socket) && message === 'ping')socket.send('pong');
+  }
+  webSocketClose(socket:WebSocket,code:number,reason:string):void { socket.close(code,reason); }
   async alarm(): Promise<void> {
     if(await this.ctx.storage.get("crm_delivery")){const next=await flushCrmOutbox(this.env);if(next!==null)await this.ctx.storage.setAlarm(next);return;}
     await sendDigests(this.env);

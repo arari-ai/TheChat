@@ -57,3 +57,8 @@ CRMの案件画面でチャンネルを作成・選択すると、その後の�
 導入設定の `logoUrl` にHTTPSのロゴURLまたは同じサイト内のパスを設定すると、ログイン画面とサイドバーに組織のロゴを表示できます。省略時は従来の表示を維持します。
 
 外部の人事・ID管理システムから `/api/hrm/*` を利用できます。専用 Secret `HRM_TOKEN` の Bearer 認証が必要です。未設定時は404です。利用停止は会話を残してログイン・通知・招待を停止します。管理者は参加者画面で停止・再開できます。
+
+## Optional TheID employee SSO
+Without identity settings TheChat retains its native email-code login and needs no provider. Optional `theid` configuration in the ignored deployment config contains `{mode:"hybrid",issuer:"https://id.example.com/api/auth",clientId:"...",appId:"chat",authPolicy:"standard"}`. Set `THEID_CLIENT_SECRET` separately as a Worker secret; never put it in configuration or source. Apply the additive migration before enabling. `hybrid` retains unmanaged native users; `oidc` requires SSO for staff but preserves unmanaged external guests. Any account once mapped to TheID, including a guest, cannot bypass identity stop via old native login. Standalone `local` deliberately disables SSO.
+
+Register callback `/api/auth/oidc/callback`, backchannel `/api/auth/oidc/backchannel`, launch `/`. Only authenticated admins on TheID may inspect minimal existing-account metadata and explicitly map an immutable local ID. Roles and conversation access remain native. Public health/bootstrap and the guest entry do not require provider availability. Staff configuration errors fail closed.
