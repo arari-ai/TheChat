@@ -19,6 +19,14 @@ export async function nativeAllowed(env:Env,id:string,role:string) {
 }
 export async function identityRoute(request:Request,env:Env):Promise<Response|null> {
  const path=new URL(request.url).pathname;
+ if(path==='/api/auth/oidc/logout'&&request.method==='POST')return null;
  if(!path.startsWith('/_theid/')&&!path.startsWith('/api/auth/oidc/'))return null;
- try{return await identity(env).handle(request);}catch{return Response.json({error:'本人確認を完了できませんでした'},{status:503,headers:{'Cache-Control':'no-store'}});}
+ try{
+  const response=await identity(env).handle(request);
+  if(path==='/api/auth/oidc/callback'&&response?.status===302&&response.headers.get('set-cookie')?.includes('theid_session=')){
+   const switched=new Response(response.body,response);
+   switched.headers.append('Set-Cookie','thechat_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0');
+   return switched;
+  }return response;
+ }catch{return Response.json({error:'本人確認を完了できませんでした'},{status:503,headers:{'Cache-Control':'no-store'}});}
 }

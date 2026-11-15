@@ -53,3 +53,35 @@ it('rejects a cross-site WebSocket upgrade',async()=>{
  const r=await mf.dispatchFetch('https://chat.example.com/api/live',{headers:{Upgrade:'websocket',Origin:'https://attacker.example',Cookie:'thechat_session=native'}});
  expect([401,403]).toContain(r.status);
 });
+
+async function competingIdentities(){
+ const suffix=crypto.randomUUID(),staff='sso-'+suffix,native='native-'+suffix,token='sso-cookie-'+suffix,now=Date.now();
+ await db.prepare("INSERT INTO users(id,email,name,role) VALUES(?,?,?,'member'),(?,?,?,'admin')").bind(staff,staff+'@example.com','SSO',native,native+'@example.com','Native admin').run();
+ await identity(env).receive({id:'grant-'+suffix,kind:'grant',revision:1,subject:staff,local_member_id:staff,principal_revision:1,grant_revision:1,enabled:true});
+ const key=await sha256(token);
+ await db.prepare('INSERT INTO theid_login_sessions(id,member_id,expires_at) VALUES(?,?,?)').bind(key,staff,now+300000).run();
+ await db.prepare('INSERT INTO theid_identity_sessions(session_id,issuer,audience,subject,sid,local_member_id,principal_revision,grant_revision,checked_at,valid_until) VALUES(?,?,?,?,?,?,1,1,?,?)').bind(key,env.THEID_ISSUER,'fixture',staff,'sid-'+suffix,staff,now,now+300000).run();
+ await db.prepare('INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)').bind(await sha256(native),native,now+300000).run();
+ return {staff,native,token,key,cookie:'theid_session='+token+'; thechat_session='+native};
+}
+it('SSO selects its native member over another native admin and never falls back after stop',async()=>{
+ const s=await competingIdentities();
+ const response=await mf.dispatchFetch('https://chat.example.com/api/me',{headers:{Cookie:s.cookie}});
+ expect(await response.json()).toMatchObject({user:{id:s.staff,role:'member'}});
+ await identity(env).receive({id:'stop-'+s.staff,kind:'grant',revision:2,subject:s.staff,local_member_id:s.staff,principal_revision:1,grant_revision:2,enabled:false});
+ expect((await mf.dispatchFetch('https://chat.example.com/api/me',{headers:{Cookie:s.cookie}})).status).toBe(401);
+});
+it.each(['/api/auth/logout','/api/auth/oidc/logout'])('both logout URLs %s invalidate competing sessions',async(path)=>{
+ const s=await competingIdentities();
+ const response=await mf.dispatchFetch('https://chat.example.com'+path,{method:'POST',headers:{Origin:'https://chat.example.com',Cookie:s.cookie}});
+ expect(response.status).toBe(200);expect(response.headers.get('set-cookie')).toContain('thechat_session=;');expect(response.headers.get('set-cookie')).toContain('theid_session=;');
+ expect((await mf.dispatchFetch('https://chat.example.com/api/me',{headers:{Cookie:'thechat_session='+s.native}})).status).toBe(401);
+ expect((await mf.dispatchFetch('https://chat.example.com/api/me',{headers:{Cookie:'theid_session='+s.token}})).status).toBe(401);
+});
+it('explicit native login invalidates the prior SSO browser session',async()=>{
+ const s=await competingIdentities(),email=s.native+'@example.com',code='654321';
+ await db.prepare('INSERT INTO login_codes(email,code_hash,expires_at,attempts,requested_at) VALUES(?,?,?,?,?)').bind(email,await sha256(email+':'+code),Date.now()+60000,0,Date.now()).run();
+ const response=await mf.dispatchFetch('https://chat.example.com/api/auth/verify',{method:'POST',headers:{Origin:'https://chat.example.com','Content-Type':'application/json',Cookie:s.cookie},body:JSON.stringify({email,code})});
+ expect(response.status).toBe(200);expect(response.headers.get('set-cookie')).toContain('theid_session=;');
+ expect(await db.prepare('SELECT count(*) n FROM theid_login_sessions WHERE id=?').bind(s.key).first('n')).toBe(0);
+});
