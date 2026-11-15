@@ -1,3 +1,4 @@
+import {managedNativeAllowed,provisioningMetadata} from '@arari/hrm-provisioning';
 import {sha256} from './auth';
 import {createRp,externalLocalAllowed,type RpEnvironment} from '@arari/theid-rp';
 import type {Env} from './env';
@@ -9,11 +10,12 @@ export function identity(env:Env) {
  if((env.THEID_MODE??'local')!=='local'&&!config(env).appOrigin)throw new Error('SSO requires appOrigin');
  return createRp(identityEnvironment(env),{
   all:async()=>{const rows=await env.DB.prepare('SELECT id,name,email,disabled_at FROM users').all<{id:string;name:string;email:string;disabled_at:string|null}>();return rows.results.map(row=>({...row,active:!row.disabled_at}));},
-  one:async(id)=>{const row=await env.DB.prepare('SELECT id,name,email,disabled_at FROM users WHERE id=?').bind(id).first<{id:string;name:string;email:string;disabled_at:string|null}>();return row?{...row,active:!row.disabled_at}:null;},
+  one:async(id)=>{const row=await env.DB.prepare('SELECT id,name,email,disabled_at FROM users WHERE id=?').bind(id).first<{id:string;name:string;email:string;disabled_at:string|null}>();return row?{...row,active:!row.disabled_at,provisioning:await provisioningMetadata(env.DB,row.id)}:null;},
  });
 }
 export async function nativeAllowed(env:Env,id:string,role:string) {
  try {
+  if(!await managedNativeAllowed(env.DB,id,env.THEID_MODE??'local'))return false;
   if((env.THEID_MODE??'local')==='local')return true;
   return role==='guest'?await externalLocalAllowed(identityEnvironment(env),id):await identity(env).localAllowed(id);
  }catch{return false;}

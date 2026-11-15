@@ -12,6 +12,9 @@ export interface HubConfig {
   emailRouteAddress?: string;
 }
 export interface Env {
+  PROVISIONING_ENABLED?: string;
+  PROVISION_SOURCE_ID?: string;
+  PROVISION_ALLOWED_ORIGIN?: string;
   DB: D1Database;
   FILES: R2Bucket;
   LIVE: DurableObjectNamespace;
