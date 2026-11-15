@@ -1,3 +1,4 @@
+import {sha256} from './auth';
 import {createRp,externalLocalAllowed,type RpEnvironment} from '@arari/theid-rp';
 import type {Env} from './env';
 import {config} from './env';
@@ -17,13 +18,20 @@ export async function nativeAllowed(env:Env,id:string,role:string) {
   return role==='guest'?await externalLocalAllowed(identityEnvironment(env),id):await identity(env).localAllowed(id);
  }catch{return false;}
 }
+export function identityCookiePresent(request:Request):boolean{
+ return (request.headers.get('Cookie')??'').split(';').some(part=>part.split('=')[0].trim()==='theid_session');
+}
 export async function identityRoute(request:Request,env:Env):Promise<Response|null> {
  const path=new URL(request.url).pathname;
+ const encodedFixedPath=(path.startsWith('/api/auth/oidc/')&&path.includes('%'))||(path.startsWith('/_theid/')&&path.slice('/_theid/'.length).split('/')[0].includes('%'));
+ if(encodedFixedPath)return Response.json({error:'URLを確認してください'},{status:400,headers:{'Cache-Control':'no-store'}});
  if(path==='/api/auth/oidc/logout'&&request.method==='POST')return null;
  if(!path.startsWith('/_theid/')&&!path.startsWith('/api/auth/oidc/'))return null;
  try{
   const response=await identity(env).handle(request);
   if(path==='/api/auth/oidc/callback'&&response?.status===302&&response.headers.get('set-cookie')?.includes('theid_session=')){
+   const native=request.headers.get('Cookie')?.split(';').map(v=>v.trim()).find(v=>v.startsWith('thechat_session='))?.slice('thechat_session='.length);
+   if(native)await env.DB.prepare('DELETE FROM sessions WHERE token_hash=?').bind(await sha256(native)).run();
    const switched=new Response(response.body,response);
    switched.headers.append('Set-Cookie','thechat_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0');
    return switched;

@@ -4,7 +4,7 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { Env, HubConfig } from './env';
 import { config } from './env';
-import {nativeAllowed} from './identity';
+import {nativeAllowed,identityCookiePresent} from './identity';
 import { canAccessChannel, cookieName, getViewer, sendMail, sha256, spacesFor, token, type Viewer } from './auth';
 import { channelMailAddress, parseIntent, type Intent } from '../shared/core';
 import { sendPush, validSubscription } from './push';
@@ -89,7 +89,7 @@ app.post('/api/auth/verify', async c => {
   const previousSso=c.req.header('cookie')?.split(';').map(s=>s.trim()).find(s=>s.startsWith('theid_session='))?.slice('theid_session='.length);
   if(previousSso&&(c.env.THEID_MODE??'local')!=='local')await c.env.DB.prepare('DELETE FROM theid_login_sessions WHERE id=?').bind(await sha256(previousSso)).run();
   c.header('Set-Cookie',responseCookie(session,c.req.raw));
-  if(previousSso)c.header('Set-Cookie','theid_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Secure',{append:true});
+  if(identityCookiePresent(c.req.raw))c.header('Set-Cookie','theid_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Secure',{append:true});
   return c.json({ user });
 });
 app.on('POST',['/api/auth/logout','/api/auth/oidc/logout'], async c => {

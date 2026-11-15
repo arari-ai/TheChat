@@ -1,6 +1,6 @@
 import type { Env } from './env';
 import { config } from './env';
-import {identity,nativeAllowed} from './identity';
+import {identity,nativeAllowed,identityCookiePresent} from './identity';
 import type {ConnectionContext as IdentityContext} from '@arari/theid-rp';
 
 export interface Viewer { id: string; email: string; name: string; role: 'admin'|'member'|'guest'; affiliation: string|null }
@@ -29,7 +29,7 @@ export async function authorizeConnection(context:ConnectionContext,env:Env):Pro
  }catch{return null;}
 }
 export async function getConnection(request:Request,env:Env):Promise<{user:Viewer;context:ConnectionContext}|null> {
- const sso=(env.THEID_MODE??'local')!=='local'&&cookie(request,'theid_session');
+ const sso=(env.THEID_MODE??'local')!=='local'&&identityCookiePresent(request);
  if(!sso){
  const value=cookie(request,cookieName);
  if(value&&env.DB){
