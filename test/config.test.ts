@@ -23,3 +23,10 @@ it('keeps optional identity settings separate from public bootstrap and routes p
  expect(cfg.vars.HUB_CONFIG).not.toContain('clientId');expect(cfg.assets.run_worker_first).toContain('/_theid/*');
  expect(()=>buildWrangler({...hub,theid:{...hub.theid,clientSecret:'DO NOT STORE'}})).toThrow();
 });
+it('requires an explicit provisioning source and keeps private HRM settings out of the public hub',()=>{
+ const hub={organizationName:'Example',domain:'chat.alpha.test',adminEmail:'admin@alpha.test',mailFrom:'chat@alpha.test',workerName:'alpha-chat',d1DatabaseId:'test-db',r2BucketName:'test-files',appOrigin:'https://chat.alpha.test'};
+ const c=buildWrangler({...hub,provisioning:{enabled:true,sourceId:'hrm-alpha',hrmOrigin:'https://hrm.alpha.test'}}) as any;
+ expect(c.vars.PROVISIONING_ENABLED).toBe('true');expect(c.vars.PROVISION_SOURCE_ID).toBe('hrm-alpha');expect(c.vars.HUB_CONFIG).not.toContain('hrm-alpha');
+ expect(()=>buildWrangler({...hub,provisioning:{enabled:true,sourceId:'hrm-alpha',hrmOrigin:'https://hrm.alpha.test/path'}})).toThrow();expect(()=>buildWrangler({...hub,provisioning:{enabled:true,sourceId:'hrm-alpha',hrmOrigin:'https://hrm.alpha.test',token:'not-allowed'}})).toThrow();
+ expect((buildWrangler(hub) as any).vars.PROVISIONING_ENABLED).toBeUndefined();
+});

@@ -29,3 +29,5 @@ export default {
 } satisfies ExportedHandler<Env>;
 
 export class HrmProvisioning extends WorkerEntrypoint<Env>{async fetch(request:Request){return createChatProvisioningReceiver(this.env).fetch(request)}}
+
+export class TheIdProtocol extends WorkerEntrypoint<Env>{async fetch(request:Request){if(!new URL(request.url).pathname.startsWith('/_theid/'))return Response.json({error:'not_found'},{status:404});return await identityRoute(request,this.env)??Response.json({error:'not_found'},{status:404})}}
