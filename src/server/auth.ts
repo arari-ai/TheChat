@@ -29,13 +29,16 @@ export async function authorizeConnection(context:ConnectionContext,env:Env):Pro
  }catch{return null;}
 }
 export async function getConnection(request:Request,env:Env):Promise<{user:Viewer;context:ConnectionContext}|null> {
+ const sso=(env.THEID_MODE??'local')!=='local'&&cookie(request,'theid_session');
+ if(!sso){
  const value=cookie(request,cookieName);
  if(value&&env.DB){
   const sessionId=await sha256(value);
   const row=await env.DB.prepare('SELECT user_id FROM sessions WHERE token_hash=? AND expires_at>?').bind(sessionId,Date.now()).first<{user_id:string}>();
   if(row){const context={kind:'native' as const,sessionId,memberId:row.user_id};const user=await authorizeConnection(context,env);if(user)return {user,context};}
  }
- if(!cookie(request,'theid_session'))return null;
+ return null;
+ }
  try{
   const session=await identity(env).connection(request);
   if(!session)return null;

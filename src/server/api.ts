@@ -86,10 +86,13 @@ app.post('/api/auth/verify', async c => {
   await c.env.DB.prepare('DELETE FROM login_codes WHERE email=?').bind(email).run();
   const session = token();
   await c.env.DB.prepare('INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)').bind(await sha256(session),user.id,Date.now()+2592000000).run();
+  const previousSso=c.req.header('cookie')?.split(';').map(s=>s.trim()).find(s=>s.startsWith('theid_session='))?.slice('theid_session='.length);
+  if(previousSso&&(c.env.THEID_MODE??'local')!=='local')await c.env.DB.prepare('DELETE FROM theid_login_sessions WHERE id=?').bind(await sha256(previousSso)).run();
   c.header('Set-Cookie',responseCookie(session,c.req.raw));
+  if(previousSso)c.header('Set-Cookie','theid_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Secure',{append:true});
   return c.json({ user });
 });
-app.post('/api/auth/logout', async c => {
+app.on('POST',['/api/auth/logout','/api/auth/oidc/logout'], async c => {
   const cookie = c.req.header('cookie')?.split(';').map(s=>s.trim()).find(s=>s.startsWith(`${cookieName}=`))?.slice(cookieName.length+1);
   if (cookie) await c.env.DB.prepare('DELETE FROM sessions WHERE token_hash=?').bind(await sha256(cookie)).run();
   c.header('Set-Cookie',`${cookieName}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
