@@ -1,3 +1,5 @@
+import {WorkerEntrypoint} from 'cloudflare:workers';
+import {createChatProvisioningReceiver} from './provisioning';
 import { app } from './api';
 import {identityRoute} from './identity';
 import { getViewer } from './auth';
@@ -25,3 +27,7 @@ export default {
   async email(message:IncomingEmail,env:Env):Promise<void> { await receiveMail(message,env); },
   async scheduled(_event:ScheduledController,env:Env,ctx:ExecutionContext):Promise<void> { ctx.waitUntil(sendDigests(env)); },
 } satisfies ExportedHandler<Env>;
+
+export class HrmProvisioning extends WorkerEntrypoint<Env>{async fetch(request:Request){return createChatProvisioningReceiver(this.env).fetch(request)}}
+
+export class TheIdProtocol extends WorkerEntrypoint<Env>{async fetch(request:Request){if(!new URL(request.url).pathname.startsWith('/_theid/'))return Response.json({error:'not_found'},{status:404});return await identityRoute(request,this.env)??Response.json({error:'not_found'},{status:404})}}

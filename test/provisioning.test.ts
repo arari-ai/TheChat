@@ -1,0 +1,34 @@
+import {it,expect,vi,afterEach} from 'vitest';
+import {readFile,readdir} from 'node:fs/promises';
+import {Miniflare,convertV4MiniflareOptions} from 'miniflare';
+import {beforeEach,afterEach as cleanup} from 'vitest';
+import {sha256} from '../src/server/auth';
+let mf:Miniflare,db:any,env:Env;
+beforeEach(async()=>{
+ mf=new Miniflare(convertV4MiniflareOptions({modules:true,script:'export default{fetch(){return new Response("fixture")}}',compatibilityDate:'2026-11-08',d1Databases:['DB']}));db=await mf.getD1Database('DB');
+ for(const n of(await readdir('migrations')).filter(n=>n.endsWith('.sql')).sort())await db.exec((await readFile('migrations/'+n,'utf8')).split('\n').filter(l=>!l.trim().startsWith('--')).join(' '));
+ env={DB:db,HUB_CONFIG:JSON.stringify({appOrigin:'https://chat.example.com',adminEmail:'admin@example.com'})} as Env;
+ await db.exec("INSERT INTO users(id,email,name,role) VALUES('admin','admin@example.com','Admin','admin'),('member','member@example.com','Member','member')");
+ await db.prepare('INSERT INTO sessions VALUES(?,?,?)').bind(await sha256('admin-token'),'admin',Date.now()+300000).run();
+});cleanup(async()=>{await mf?.dispose()});
+import {app as nativeApp} from '../src/server/api';
+import {identityRoute} from '../src/server/identity';
+const app={request:async(url:string,init:RequestInit,env:Env)=>await identityRoute(new Request(url,init),env)??await nativeApp.request(url,init,env)};
+import {createChatProvisioningReceiver} from '../src/server/provisioning';
+import type {Env} from '../src/server/env';
+afterEach(()=>vi.restoreAllMocks());
+const cfg=()=>({...env,PROVISIONING_ENABLED:'true',PROVISION_SOURCE_ID:'fixture-hrm',PROVISION_ALLOWED_ORIGIN:'https://hrm.example.test',THEID_MODE:'hybrid',THEID_ISSUER:'https://id-fixture.example.test/api/auth',THEID_CLIENT_ID:'chat-fixture',THEID_APP_ID:'chat',THEID_CLIENT_SECRET:'synthetic-fixture-secret'}) as Env;
+const body=(extra={})=>({version:1,request_id:crypto.randomUUID(),source_id:'fixture-hrm',person_id:'new-worker',generation:1,name:'New Worker',account_email:'new-worker@example.com',identity_mode:'theid',identity_subject:'new-subject',role:'member',privileged_explicit:false,...extra});
+const request=(b:unknown,path='/v1/accounts')=>new Request('https://suite.internal'+path,{method:'POST',headers:{'X-Suite-Source':'https://hrm.example.test','X-HRM-Source-Id':'fixture-hrm','Content-Type':'application/json'},body:JSON.stringify(b)});
+const send=(b=body())=>createChatProvisioningReceiver(cfg()).fetch(request(b));
+it('creates a native ordinary worker without role, workload or other people changes',async()=>{const r=await send(),b=await r.json() as any;expect(r.status).toBe(201);expect(await db.prepare('SELECT role,disabled_at FROM users WHERE id=?').bind(b.local_member_id).first()).toEqual({role:'member',disabled_at:null});expect(await db.prepare("SELECT role FROM users WHERE id='admin'").first('role')).toBe('admin')});
+it('requires explicit administrator choice and never promotes an existing same-email user',async()=>{expect((await send(body({role:'admin'}))).status).toBe(403);expect((await send(body({role:'admin',privileged_explicit:true}))).status).toBe(201);expect((await send(body({person_id:'other',account_email:'member@example.com',role:'admin',privileged_explicit:true}))).status).toBe(409);expect(await db.prepare("SELECT role FROM users WHERE id='member'").first('role')).toBe('member')});
+it('native code/session insertion is blocked while managed SSO is pending, preserving old users',async()=>{const result=await(await send()).json() as any;const response=await app.request('https://chat.example.com/api/auth/request',{method:'POST',headers:{Origin:'https://chat.example.com','Content-Type':'application/json'},body:JSON.stringify({email:'new-worker@example.com'})},cfg());expect(response.status).toBe(200);expect(await db.prepare("SELECT count(*) n FROM login_codes WHERE email='new-worker@example.com'").first('n')).toBe(0);await expect(db.prepare('INSERT INTO sessions VALUES(?,?,?)').bind('old-auth-attempt',result.local_member_id,Date.now()+300000).run()).rejects.toThrow();expect((await app.request('https://chat.example.com/api/me',{headers:{Cookie:'thechat_session=admin-token'}},cfg())).status).toBe(200)});
+it('signed account lookup exposes the exact managed employee reference for TheID validation',async()=>{
+ const made=await(await send()).json() as any,{generateKeyPair,exportJWK,SignJWT}=await import('jose');const pair=await generateKeyPair('RS256',{extractable:true}),jwk={...await exportJWK(pair.publicKey),kid:crypto.randomUUID(),alg:'RS256',use:'sig'};
+ vi.spyOn(globalThis,'fetch').mockImplementation(async(input)=>{const u=typeof input==='string'?input:input instanceof Request?input.url:input.toString();if(u==='https://id-fixture.example.test/api/auth/jwks')return Response.json({keys:[jwk]});throw Error('Unexpected fixture peer')});
+ const token=await new SignJWT({purpose:'provisioning'}).setProtectedHeader({alg:'RS256',kid:jwk.kid}).setIssuer('https://id-fixture.example.test/api/auth').setAudience('chat-fixture').setSubject('theid').setJti(crypto.randomUUID()).setIssuedAt().setExpirationTime('60s').sign(pair.privateKey);
+ const r=await app.request('https://chat.example.com/_theid/accounts/'+made.local_member_id,{headers:{Authorization:'Bearer '+token}},cfg());expect(r.status).toBe(200);expect(await r.json()).toMatchObject({id:made.local_member_id,active:true,provisioning:{source_id:'fixture-hrm',person_id:'new-worker',identity_subject:'new-subject',enabled:true}});
+});
+it('retries and stop-before-create use one stable native account and deny stale activation',async()=>{const input=body(),a=await(await send(input)).json() as any,b=await(await send(input)).json() as any;expect(a.local_member_id).toBe(b.local_member_id);const stopped=await createChatProvisioningReceiver(cfg()).fetch(request({version:1,request_id:crypto.randomUUID(),source_id:'fixture-hrm',person_id:'new-worker',generation:2},'/v1/accounts/stop'));expect(stopped.status).toBe(200);expect(await db.prepare('SELECT disabled_at FROM users WHERE id=?').bind(a.local_member_id).first('disabled_at')).not.toBeNull();expect((await send(input)).status).toBe(409)});
+it('refuses disabled or foreign-source requests and leaves public app unregistered',async()=>{expect((await createChatProvisioningReceiver(env as Env).fetch(request(body()))).status).toBe(404);expect((await send(body({source_id:'other-hrm'}))).status).toBe(403);expect((await app.request('https://chat.example.com/v1/accounts',{method:'POST',body:JSON.stringify(body())},cfg())).status).toBe(404)});

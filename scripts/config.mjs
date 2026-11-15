@@ -1,3 +1,4 @@
+import {applyProvisioningConfiguration} from './provisioning-deployment.mjs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
@@ -49,6 +50,11 @@ export function buildWrangler(hub) {
   else if (hub.emailCatchAll) result.addresses=[`*@${hub.domain}`];
   if (hub.emailProvider==='cloudflare') result.send_email=[{name:'EMAIL'}];
   if (hub.eventsQueueName) result.queues={producers:[{binding:'EVENTS_QUEUE',queue:hub.eventsQueueName}]};
+  if(hub.provisioning){
+    const p=hub.provisioning;
+    if(!p||typeof p!=='object'||Object.keys(p).some(k=>!['enabled','sourceId','hrmOrigin'].includes(k))||typeof p.enabled!=='boolean')throw Error('Invalid provisioning options');
+    applyProvisioningConfiguration(result,{vars:{PROVISIONING_ENABLED:String(p.enabled),...(p.sourceId?{PROVISION_SOURCE_ID:p.sourceId}:{}),...(p.hrmOrigin?{PROVISION_ALLOWED_ORIGIN:p.hrmOrigin}:{})}},'chat');
+  }
   return result;
 }
 
