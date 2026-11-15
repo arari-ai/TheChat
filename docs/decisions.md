@@ -48,3 +48,7 @@ Portable adapter0.1.2 uses only prefixed identity tables in the application's D1
 
 ## Explicit identity selection and dual app logout
 SSO selects its native account when both cookies are present; a revoked SSO session never silently falls back to another native identity. The successful callback clears the alternate native cookie, and explicit native verification deletes and clears the previous SSO session. Both app logout URLs route to the host's dual-session handler, so neither cookie can restore a different identity after logout. Native guest permissions and machine integrations remain independent. Regression tests cover competing member/admin identities and old socket/session invalidation.
+
+## 2026-11-15: SSOと単体ログインの境界
+
+ネイティブ利用者の停止・削除時にアプリのSSOセッションも破棄し、再有効化で古いログインを復活させない。過去の停止履歴から判定できないセッションは追加マイグレーションでアプリSSOのみ一度破棄する。中央TheIDと社外ゲストの単体ログインは維持する。空・非正規表記のSSO Cookieがあっても別の単体管理者へ切り替えない。固定OIDCパスの符号化表記は処理前に拒否し、正規コールバックでは切り替え前の単体セッション行を失効させる。WebSocketの再認証も同じ失効状態を参照する。
