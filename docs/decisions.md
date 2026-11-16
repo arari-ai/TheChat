@@ -60,3 +60,7 @@ SSO selects its native account when both cookies are present; a revoked SSO sess
 ## 2026-11-16: 同一ゾーンのTheIDへの取得経路
 
 生成するWorker設定に `global_fetch_strictly_public` を明示する。同一ゾーンで公開されたTheIDのJWKSなどへのfetchを公開Workerへ送り、従来のプライベートオリジン経路による到達失敗を避ける。署名検証、issuer、認可、既存の接続先は変更しない。TheDecisionで確認した同一ゾーンJWKS取得の522と同じ配置条件を持つため、TheChatでも経路を明示する。実際の本番復旧は公開後に確認する。
+
+## 2026-11-16: 任意の中央表示名同期
+
+明示的に対応付けた既存利用者のみ、署名付きの氏名更新を受け付ける。SDK 0.1.4の対応付け・版・重複検査とネイティブ利用停止検査を同じD1トランザクションで適用する。更新対象はusers.nameのみで、メール、ロール、会話参加、ゲストの単体ログインには変更を加えない。
