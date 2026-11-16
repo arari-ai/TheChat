@@ -52,3 +52,28 @@ it("an old valid email code cannot mutate an invitation or create a native sessi
  expect(r.status).toBe(403);
  expect(r.headers.get('set-cookie')).toBeNull();
 });
+
+it('applies ordered mapped names only, preserving native email and permissions',async()=>{
+ const c=configured(),rp=identity(c),profileDb=db;
+ const nativeId='profile-fixture',subject='profile-subject-fixture';
+ await profileDb.prepare("INSERT INTO users(id,email,name,role) VALUES('profile-fixture','profile@example.test','Before','member')").run();
+ const before=await profileDb.prepare('SELECT * FROM users WHERE id=?').bind(nativeId).first();
+ const body=(revision:number,name='Canonical Name')=>({version:1,request_id:crypto.randomUUID(),subject,local_member_id:nativeId,name,profile_revision:revision,principal_revision:1,grant_revision:1});
+ await expect(rp.profile(body(1))).rejects.toThrow();
+ await rp.receive({id:crypto.randomUUID(),kind:'grant',revision:1,subject,local_member_id:nativeId,principal_revision:1,grant_revision:1,enabled:true});
+ // Simulate native disable after the SDK read, immediately before its transaction.
+ const raced=identity({...c,DB:{prepare:(sql:string)=>profileDb.prepare(sql),batch:async(statements:D1PreparedStatement[])=>{await profileDb.prepare('UPDATE users SET disabled_at=1 WHERE id=?').bind(nativeId).run();return profileDb.batch(statements)}} as D1Database});
+ await expect(raced.profile(body(1,'Raced Name'))).rejects.toThrow();
+ expect(await profileDb.prepare('SELECT COUNT(*) n FROM theid_profiles WHERE member_id=?').bind(nativeId).first('n')).toBe(0);
+ await profileDb.prepare('UPDATE users SET disabled_at=NULL WHERE id=?').bind(nativeId).run();
+ const first=body(2);await rp.profile(first);await rp.profile(first);
+ const after=await profileDb.prepare('SELECT * FROM users WHERE id=?').bind(nativeId).first();
+ expect(after).toEqual({...before,name:'Canonical Name'});
+ expect(await rp.profile(body(1,'Old Name'))).toMatchObject({ignored:true,applied:false});
+ await profileDb.prepare('UPDATE users SET disabled_at=1 WHERE id=?').bind(nativeId).run();
+ await expect(rp.profile(body(3,'Inactive Name'))).rejects.toThrow();
+ await profileDb.prepare('UPDATE users SET disabled_at=NULL WHERE id=?').bind(nativeId).run();
+ await rp.receive({id:crypto.randomUUID(),kind:'grant',revision:2,subject,local_member_id:nativeId,principal_revision:1,grant_revision:2,enabled:false});
+ await expect(rp.profile({...body(4,'Stopped Name'),grant_revision:2})).rejects.toThrow();
+ expect(await profileDb.prepare('SELECT name FROM users WHERE id=?').bind(nativeId).first('name')).toBe('Canonical Name');
+});

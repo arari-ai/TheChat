@@ -9,6 +9,11 @@ export function identityEnvironment(env:Env):RpEnvironment {
 export function identity(env:Env) {
  if((env.THEID_MODE??'local')!=='local'&&!config(env).appOrigin)throw new Error('SSO requires appOrigin');
  return createRp(identityEnvironment(env),{
+  // Name only; native availability is asserted again inside the SDK transaction.
+  updateName:(id,name)=>[
+   env.DB.prepare("UPDATE users SET name=? WHERE id=? AND disabled_at IS NULL").bind(name,id),
+   env.DB.prepare("INSERT INTO theid_identity_assert SELECT CASE WHEN EXISTS(SELECT 1 FROM users WHERE id=? AND name=? AND disabled_at IS NULL) THEN 1 ELSE 0 END").bind(id,name),
+  ],
   all:async()=>{const rows=await env.DB.prepare('SELECT id,name,email,disabled_at FROM users').all<{id:string;name:string;email:string;disabled_at:string|null}>();return rows.results.map(row=>({...row,active:!row.disabled_at}));},
   one:async(id)=>{const row=await env.DB.prepare('SELECT id,name,email,disabled_at FROM users WHERE id=?').bind(id).first<{id:string;name:string;email:string;disabled_at:string|null}>();return row?{...row,active:!row.disabled_at,provisioning:await provisioningMetadata(env.DB,row.id)}:null;},
  });
