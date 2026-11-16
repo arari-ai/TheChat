@@ -208,12 +208,12 @@ export async function channelParticipants(env:Env, spaceId:string):Promise<strin
   const rows=await env.DB.prepare("SELECT DISTINCT u.id FROM users u LEFT JOIN space_members sm ON sm.user_id=u.id AND sm.space_id=? LEFT JOIN spaces s ON s.id=? WHERE u.disabled_at IS NULL AND (u.role='admin' OR sm.user_id IS NOT NULL OR (s.all_members=1 AND u.role='member'))").bind(spaceId,spaceId).all<{id:string}>();
   return rows.results.map(r=>r.id);
 }
-export async function emit(env:Env,userIds:string[],kind:string,messageId:string,channelId:string|null,dmId:string|null,notifyIds:string[]=[]):Promise<void> {
+export async function emit(env:Env,userIds:string[],kind:string,messageId:string,channelId:string|null,dmId:string|null,notifyIds:string[]=[],notifyPreferences=true):Promise<void> {
   const active=await env.DB.prepare('SELECT id FROM users WHERE disabled_at IS NULL AND id IN (SELECT value FROM json_each(?))').bind(JSON.stringify(userIds)).all<{id:string}>();
   userIds=active.results.map(r=>r.id);
   if(!userIds.length) return;
   const notified=new Set(notifyIds);
-  if(channelId){
+  if(channelId&&notifyPreferences){
     const settings=await env.DB.prepare('SELECT user_id,mode FROM channel_notification_settings WHERE channel_id=?').bind(channelId).all<{user_id:string;mode:string}>();
     const author=await env.DB.prepare('SELECT author_id FROM messages WHERE id=?').bind(messageId).first<{author_id:string|null}>();
     for(const setting of settings.results){
@@ -231,12 +231,14 @@ export async function emit(env:Env,userIds:string[],kind:string,messageId:string
   }));
   if(env.EVENTS_QUEUE) await env.EVENTS_QUEUE.send({kind,messageId,channelId,dmId});
 }
+function messageSelect(column:"channel_id"|"dm_id"){return `SELECT m.*,(SELECT count(*) FROM messages replies WHERE replies.${column}=m.${column} AND replies.thread_root_id=m.id AND replies.deleted_at IS NULL) reply_count,u.name author_name,u.disabled_at author_disabled_at,u.affiliation author_affiliation,(SELECT json_group_array(user_id) FROM message_addressees WHERE message_id=m.id) addressees,(SELECT json_group_object(user_id,status) FROM message_addressees WHERE message_id=m.id) addressee_status,(SELECT json_group_array(json_object('user_id',user_id,'kind',kind)) FROM reactions WHERE message_id=m.id) reactions,(SELECT json_group_array(json_object('id',id,'filename',filename,'bytes',bytes,'omitted',omitted)) FROM attachments WHERE message_id=m.id) attachment_list FROM messages m LEFT JOIN users u ON u.id=m.author_id`;}
+function visibleMessage(m:any){return m.deleted_at?{id:m.id,channel_id:m.channel_id,dm_id:m.dm_id,thread_root_id:m.thread_root_id,created_at:m.created_at,deleted_at:m.deleted_at,edited_at:null,author_id:null,author_name:null,external_name:null,external_email:null,author_affiliation:null,body:"",intent:null,due_date:null,source:"chat",status:"deleted",mail_subject:null,attachment_list:"[]",reactions:"[]",addressees:"[]",addressee_status:"{}",reply_count:m.reply_count}:m;}
 async function messageList(c:Context<Bindings>, column:'channel_id'|'dm_id', id:string, root:string|null) {
   const before=asId(c.req.query('before')); const after=asId(c.req.query('after'));
   const condition=before?'AND m.id<?':after?'AND m.id>?':'';
   const order=after?'ASC':'DESC'; const args=[id,root]; if(before||after) args.push(before||after);
-  const rows=await c.env.DB.prepare(`SELECT m.*,(SELECT count(*) FROM messages replies WHERE replies.${column}=m.${column} AND replies.thread_root_id=m.id AND replies.deleted_at IS NULL) reply_count,u.name author_name,u.disabled_at author_disabled_at,u.affiliation author_affiliation,(SELECT json_group_array(user_id) FROM message_addressees WHERE message_id=m.id) addressees,(SELECT json_group_object(user_id,status) FROM message_addressees WHERE message_id=m.id) addressee_status,(SELECT json_group_array(json_object('user_id',user_id,'kind',kind)) FROM reactions WHERE message_id=m.id) reactions,(SELECT json_group_array(json_object('id',id,'filename',filename,'bytes',bytes,'omitted',omitted)) FROM attachments WHERE message_id=m.id) attachment_list FROM messages m LEFT JOIN users u ON u.id=m.author_id WHERE m.${column}=? AND m.thread_root_id IS ? AND m.deleted_at IS NULL ${condition} ORDER BY m.id ${order} LIMIT 51`).bind(...args).all();
-  const hasMore=rows.results.length>50; const messages=rows.results.slice(0,50);
+  const rows=await c.env.DB.prepare(`${messageSelect(column)} WHERE m.${column}=? AND m.thread_root_id IS ? AND (m.deleted_at IS NULL OR (m.thread_root_id IS NULL AND EXISTS(SELECT 1 FROM messages r WHERE r.thread_root_id=m.id AND r.deleted_at IS NULL))) ${condition} ORDER BY m.id ${order} LIMIT 51`).bind(...args).all();
+  const hasMore=rows.results.length>50; const messages=rows.results.slice(0,50).map(visibleMessage);
   if(!after) messages.reverse();
   const replyCount=root&&column==='channel_id'?(await c.env.DB.prepare('SELECT count(*) count FROM messages WHERE channel_id=? AND thread_root_id=? AND deleted_at IS NULL').bind(id,root).first<{count:number}>())?.count:null;
   return c.json({messages,hasMore,cursor:messages.length?messages[0].id:null,...(replyCount===null?{}:{replyCount})});
@@ -360,6 +362,35 @@ app.post('/api/read',async c=>{
   await c.env.DB.prepare('UPDATE message_mentions SET read_at=? WHERE user_id=? AND message_id<=? AND message_id IN (SELECT id FROM messages WHERE channel_id=?)').bind(Date.now(),user.id,lastId,channelId||'').run();
   return c.json({ok:true});
 });
+app.get('/api/messages/:id',async c=>{
+ const user=await viewer(c);if(!user)return jsonError(c,401,'ログインしてください');
+ const scope=await c.env.DB.prepare('SELECT channel_id,dm_id FROM messages WHERE id=?').bind(asId(c.req.param('id'))).first<{channel_id:string|null;dm_id:string|null}>();
+ if(!scope||(!scope.channel_id&&!scope.dm_id)||scope.channel_id&&!await canAccessChannel(c.env,user,scope.channel_id)||scope.dm_id&&!await canAccessDm(c.env,user,scope.dm_id))return jsonError(c,404,'見つかりません');
+ const message=await c.env.DB.prepare(`${messageSelect(scope.channel_id?'channel_id':'dm_id')} WHERE m.id=?`).bind(asId(c.req.param('id'))).first();
+ if(!message)return jsonError(c,404,'見つかりません');return c.json({message:visibleMessage(message)});
+});
+app.on(['PATCH','DELETE'],'/api/messages/:id',async c=>{
+  const user=await viewer(c);if(!user)return jsonError(c,401,'ログインしてください');
+  const message=await c.env.DB.prepare('SELECT id,channel_id,dm_id,author_id,source,body FROM messages WHERE id=? AND deleted_at IS NULL').bind(asId(c.req.param('id'))).first<{id:string;channel_id:string|null;dm_id:string|null;author_id:string|null;source:string;body:string}>();
+  if(!message||(!message.channel_id&&!message.dm_id)||message.channel_id&&!await canAccessChannel(c.env,user,message.channel_id)||message.dm_id&&!await canAccessDm(c.env,user,message.dm_id))return jsonError(c,404,'見つかりません');
+  if(message.author_id!==user.id||!['chat','app','mail_out'].includes(message.source))return jsonError(c,403,'自分の投稿のみ変更できます');
+  const deleting=c.req.method==='DELETE';const inputBody=deleting?{}:await input(c);
+  if(!deleting&&(Object.keys(inputBody).some(k=>!['body','expectedBody'].includes(k))||typeof inputBody.body!=='string'||!inputBody.body.trim()||inputBody.body.length>10000||typeof inputBody.expectedBody!=='string'))return jsonError(c,400,'本文を確認してください');
+  if(!deleting&&inputBody.expectedBody!==message.body)return jsonError(c,409,'投稿が更新されています。内容を確認してもう一度編集してください');
+  const stamp=new Date().toISOString();const next=deleting?message.body:(inputBody.body as string).trim();
+  // Fence author, active native account and current channel membership in the write too.
+  const guard=`id=? AND author_id=? AND deleted_at IS NULL AND body=? AND EXISTS(SELECT 1 FROM users actor WHERE actor.id=messages.author_id AND actor.disabled_at IS NULL AND (messages.channel_id IS NULL OR EXISTS(SELECT 1 FROM channels ch JOIN spaces s ON s.id=ch.space_id WHERE ch.id=messages.channel_id AND ch.archived=0 AND s.archived=0 AND (actor.role='admin' OR (s.all_members=1 AND actor.role='member') OR EXISTS(SELECT 1 FROM space_members sm WHERE sm.space_id=s.id AND sm.user_id=actor.id)))) AND (messages.dm_id IS NULL OR (EXISTS(SELECT 1 FROM dm_members dm WHERE dm.dm_id=messages.dm_id AND dm.user_id=actor.id) AND (actor.role='admin' OR NOT EXISTS(SELECT 1 FROM dm_members dm JOIN users peer ON peer.id=dm.user_id WHERE dm.dm_id=messages.dm_id AND peer.id<>actor.id AND NOT EXISTS(SELECT 1 FROM spaces shared WHERE shared.archived=0 AND ((shared.all_members=1 AND actor.role='member') OR EXISTS(SELECT 1 FROM space_members mine WHERE mine.space_id=shared.id AND mine.user_id=actor.id)) AND (peer.role='admin' OR (shared.all_members=1 AND peer.role='member') OR EXISTS(SELECT 1 FROM space_members theirs WHERE theirs.space_id=shared.id AND theirs.user_id=peer.id))))))))`;
+  const mutation=c.env.DB.prepare(`UPDATE messages SET ${deleting?'deleted_at':'edited_at'}=?${deleting?'':',body=?'} WHERE ${guard}`).bind(...(deleting?[stamp,message.id,user.id,message.body]:[stamp,next,message.id,user.id,message.body]));
+  const applied=`EXISTS(SELECT 1 FROM messages WHERE id=? AND ${deleting?'deleted_at':'edited_at'}=?)`;
+  const statements=[mutation,c.env.DB.prepare(`DELETE FROM messages_fts WHERE message_id=? AND ${applied}`).bind(message.id,message.id,stamp)];
+  if(!deleting&&message.channel_id)statements.push(c.env.DB.prepare(`INSERT INTO messages_fts(body,message_id,channel_id) SELECT body,id,channel_id FROM messages WHERE id=? AND edited_at=? AND deleted_at IS NULL`).bind(message.id,stamp));
+  if(deleting)statements.push(c.env.DB.prepare(`UPDATE events SET notifiable=0 WHERE message_id=? AND ${applied}`).bind(message.id,message.id,stamp));
+  const result=await c.env.DB.batch(statements);if(!result[0].meta.changes)return jsonError(c,409,'投稿が更新されたか、利用権限が変わりました。画面を更新してください');
+  const channel=message.channel_id?await canAccessChannel(c.env,user,message.channel_id):null;
+  const recipients=channel?await channelParticipants(c.env,channel.space_id):message.dm_id?(await c.env.DB.prepare('SELECT user_id id FROM dm_members WHERE dm_id=?').bind(message.dm_id).all<{id:string}>()).results.map(r=>r.id):[];
+  c.executionCtx.waitUntil(emit(c.env,recipients,deleting?'message_deleted':'message_edited',message.id,message.channel_id,message.dm_id,[],false));
+  return c.json({ok:true,...(deleting?{deleted_at:stamp}:{body:next,edited_at:stamp})});
+});
 app.post('/api/messages/:id/respond',async c=>{
   const user=await viewer(c); if(!user)return jsonError(c,401,'ログインしてください');
   const body=await input(c);const status=clean(body.status,20);
@@ -409,7 +440,7 @@ app.get('/api/search',async c=>{
 });
 app.get('/api/attachments/:id',async c=>{
   const user=await viewer(c);if(!user)return jsonError(c,401,'ログインしてください');
-  const row=await c.env.DB.prepare('SELECT a.*,m.channel_id FROM attachments a JOIN messages m ON m.id=a.message_id WHERE a.id=?').bind(c.req.param('id')).first<{r2_key:string;filename:string;media_type:string;channel_id:string}>();
+  const row=await c.env.DB.prepare('SELECT a.*,m.channel_id FROM attachments a JOIN messages m ON m.id=a.message_id WHERE a.id=? AND m.deleted_at IS NULL').bind(c.req.param('id')).first<{r2_key:string;filename:string;media_type:string;channel_id:string}>();
   if(!row||!await canAccessChannel(c.env,user,row.channel_id))return jsonError(c,404,'見つかりません');
   const object=await c.env.FILES.get(row.r2_key);if(!object)return jsonError(c,404,'見つかりません');
   return new Response(object.body,{headers:{'Content-Type':row.media_type||'application/octet-stream','Content-Disposition':`attachment; filename*=UTF-8''${encodeURIComponent(row.filename)}`,'X-Content-Type-Options':'nosniff'}});
