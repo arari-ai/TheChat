@@ -27,3 +27,21 @@ describe('message thread action', () => {
     expect(html).not.toContain('スレッドを開く');
   });
 });
+
+describe('author message controls',()=>{
+ it('offers editing and deletion only for the current author',()=>{
+  const own=renderToStaticMarkup(createElement(MessageCard,{message,me,onReact,onChanged:()=>{}}));
+  expect(own).toContain('投稿を編集');expect(own).toContain('投稿を削除');
+  const other=renderToStaticMarkup(createElement(MessageCard,{message:{...message,author_id:'other'},me,onReact,onChanged:()=>{}}));
+  expect(other).not.toContain('投稿を編集');expect(other).not.toContain('投稿を削除');
+ });
+ it('renders deleted parents without body, attachments or action controls but keeps replies reachable',()=>{
+  const html=renderToStaticMarkup(createElement(MessageCard,{message:{...message,deleted_at:'2026-11-16',body:'secret',attachment_list:'[{"id":"f","filename":"secret.txt"}]'},me,onReact,onThread,onChanged:()=>{}}));
+  expect(html).toContain('削除された投稿');expect(html).toContain('スレッドを開く');
+  expect(html).not.toContain('secret');expect(html).not.toContain('ありがとう');expect(html).not.toContain('投稿を編集');
+ });
+ it('shows edited status without interpreting message text as HTML',()=>{
+  const html=renderToStaticMarkup(createElement(MessageCard,{message:{...message,edited_at:'2026-11-16',body:'<script>alert(1)</script>\n次の行'},me,onReact}));
+  expect(html).toContain('編集済み');expect(html).not.toContain('<script>');expect(html).toContain('次の行');
+ });
+});

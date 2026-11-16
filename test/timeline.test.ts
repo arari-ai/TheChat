@@ -1,0 +1,6 @@
+import {it,expect} from 'vitest';
+import {TimelinePosition} from '../src/client/timeline-position';
+function viewport(){const v={scrollTop:0,scrollHeight:1000,clientHeight:200,anchorTop:520,getBoundingClientRect:()=>({top:0}),querySelectorAll:()=>[{dataset:{messageId:'anchor'},getBoundingClientRect:()=>({top:v.anchorTop-v.scrollTop,bottom:v.anchorTop+40-v.scrollTop})}]};return v as unknown as HTMLElement;}
+it('opens at the latest post and follows subsequent updates near the bottom',()=>{const p=new TimelinePosition(),v=viewport();p.restore(v);expect(v.scrollTop).toBe(1000);v.scrollTop=800;p.capture(v);Object.defineProperty(v,'scrollHeight',{value:1200,configurable:true});p.restore(v);expect(v.scrollTop).toBe(1200);});
+it('preserves an old reading anchor across prepends and refreshes',()=>{const p=new TimelinePosition(),v=viewport();v.scrollTop=500;p.capture(v);Object.defineProperty(v,'scrollHeight',{value:1400,configurable:true});(v as HTMLElement&{anchorTop:number}).anchorTop+=400;p.restore(v);expect(v.scrollTop).toBe(900);});
+it('moves to the latest after an explicit send request',()=>{const p=new TimelinePosition(),v=viewport();v.scrollTop=300;p.capture(v);p.latest();p.restore(v);expect(v.scrollTop).toBe(1000);});
