@@ -45,3 +45,9 @@ describe('author message controls',()=>{
   expect(html).toContain('編集済み');expect(html).not.toContain('<script>');expect(html).toContain('次の行');
  });
 });
+
+import {DeleteConfirmation} from '../src/client/MessageEditor';
+it('uses an inline deletion confirmation explaining that replies remain',()=>{
+ const html=renderToStaticMarkup(createElement(DeleteConfirmation,{busy:false,onConfirm:()=>{},onCancel:()=>{}}));
+ expect(html).toContain('投稿の削除確認');expect(html).toContain('返信は残ります');expect(html).toContain('削除する');expect(html).toContain('キャンセル');
+});
