@@ -56,3 +56,7 @@ SSO selects its native account when both cookies are present; a revoked SSO sess
 ## 2026-11-15: 入社時の任意アプリ登録
 
 利用者の明示依頼により、第1段階の範囲をHRMからの入社登録へ拡張する。公開APIと既存Bearer権限は拡大せず、無効が既定の専用Worker entrypointで受け付ける。一般社員はmember、管理者は明示選択の場合だけ作成する。メール一致で既存ゲストや会話参加権限を引き継がず、対応が必要なら管理者確認とする。TheID管理の新規利用者は対応付け途中・停止時にネイティブログインへ迂回できない。単体導入と既存ゲストの入口を維持する。
+
+## 2026-11-16: 同一ゾーンのTheIDへの取得経路
+
+生成するWorker設定に `global_fetch_strictly_public` を明示する。同一ゾーンで公開されたTheIDのJWKSなどへのfetchを公開Workerへ送り、従来のプライベートオリジン経路による到達失敗を避ける。署名検証、issuer、認可、既存の接続先は変更しない。TheDecisionで確認した同一ゾーンJWKS取得の522と同じ配置条件を持つため、TheChatでも経路を明示する。実際の本番復旧は公開後に確認する。

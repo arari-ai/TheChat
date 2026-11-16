@@ -20,6 +20,8 @@ export function buildWrangler(hub) {
     name:hub.workerName,
     main:'src/server/worker.ts',
     compatibility_date:'2026-11-08',
+    // Same-zone TheID endpoints are public Workers rather than a private origin.
+    compatibility_flags:['global_fetch_strictly_public'],
     assets:{directory:'./dist',binding:'ASSETS',not_found_handling:'single-page-application',run_worker_first:['/api/*','/_theid/*']},
     d1_databases:[{binding:'DB',database_name:hub.d1DatabaseName||`${hub.workerName}-db`,database_id:hub.d1DatabaseId,migrations_dir:'migrations'}],
     r2_buckets:[{binding:'FILES',bucket_name:hub.r2BucketName}],
