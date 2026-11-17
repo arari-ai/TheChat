@@ -224,10 +224,13 @@ export async function emit(env:Env,userIds:string[],kind:string,messageId:string
   await env.DB.batch(userIds.map(id=>env.DB.prepare('INSERT INTO events(user_id,kind,message_id,channel_id,dm_id,notifiable) VALUES(?,?,?,?,?,?)').bind(id,kind,messageId,channelId,dmId,notified.has(id)?1:0)));
   if(notified.size){try{await env.LIVE.get(env.LIVE.idFromName('__digest__')).fetch('https://live/digest/ensure',{method:'POST'});}catch(error){console.error('Digest scheduler failed',error instanceof Error?error.message:'unknown error');}}
   const live=await Promise.allSettled(userIds.map(id=>env.LIVE.get(env.LIVE.idFromName(id)).fetch('https://live/event',{method:'POST',body:JSON.stringify({kind,messageId,channelId,dmId})})));
+  // A mention reaches the person's devices even while another screen is connected; other notifications wait until nobody is connected.
+  const mentioned=new Set<string>();
+  if(kind==='message'&&notified.size){const rows=await env.DB.prepare('SELECT user_id FROM message_mentions WHERE message_id=?').bind(messageId).all<{user_id:string}>();for(const row of rows.results)mentioned.add(row.user_id);}
   await Promise.allSettled(userIds.filter(id=>notified.has(id)).map(async id=>{
     const index=userIds.indexOf(id);const result=live[index];
     const count=result.status==='fulfilled'?(await result.value.json() as {connections:number}).connections:0;
-    if(count===0)await sendPush(env,id);
+    if(count===0||mentioned.has(id))await sendPush(env,id,messageId,kind);
   }));
   if(env.EVENTS_QUEUE) await env.EVENTS_QUEUE.send({kind,messageId,channelId,dmId});
 }
@@ -491,6 +494,12 @@ app.post('/api/push/subscriptions',async c=>{
   if(!validSubscription(body))return jsonError(c,400,'通知の登録情報を確認してください');
   await c.env.DB.prepare('INSERT INTO push_subscriptions(id,user_id,endpoint,p256dh,auth) VALUES(?,?,?,?,?) ON CONFLICT(endpoint) DO UPDATE SET user_id=excluded.user_id,p256dh=excluded.p256dh,auth=excluded.auth').bind(createId(),user.id,body.endpoint,body.keys.p256dh,body.keys.auth).run();
   return c.json({ok:true},201);
+});
+app.post('/api/push/subscriptions/remove',async c=>{
+  const user=await viewer(c);if(!user)return jsonError(c,401,'ログインしてください');const body=await input(c);
+  if(typeof body.endpoint!=='string'||body.endpoint.length>2048)return jsonError(c,400,'通知の登録情報を確認してください');
+  await c.env.DB.prepare('DELETE FROM push_subscriptions WHERE endpoint=? AND user_id=?').bind(body.endpoint,user.id).run();
+  return c.json({ok:true});
 });
 
 app.post('/api/admin/accounts/:id/:action',async c=>{const admin=await viewer(c);if(!admin)return jsonError(c,401,'ログインしてください');if(admin.role!=='admin')return jsonError(c,403,'管理者のみ操作できます');const action=c.req.param('action');if(!['disable','enable'].includes(action))return jsonError(c,404,'not_found');const target=await c.env.DB.prepare('SELECT email FROM users WHERE id=?').bind(c.req.param('id')).first<{email:string}>();if(!target||!hrmEmail(target.email))return jsonError(c,404,'not_found');const result=await changeAccount(c.env,target.email,action==='enable');return c.json(result,'error'in result?409:200)});

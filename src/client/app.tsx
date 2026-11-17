@@ -4,6 +4,7 @@ import {MessageEditor,DeleteMessage} from './MessageEditor';
 import {ChannelLinkButton} from './ChannelLinkButton';
 import {linkedChannel} from './logic';
 import React,{useCallback,useEffect,useMemo,useState} from 'react';
+import { applyBadge,pushSupported,removePushSubscription,syncPushSubscription } from './push';
 import { api,post,type Channel,type InboxItem,type Message,type NotificationItem,type PendingInvitation,type Space,type SpacePerson,type User } from './api';
 import { connectLive } from './live';
 import { shouldSend } from './logic';
@@ -71,13 +72,9 @@ function PushSetup(){
   useEffect(()=>{if(!('Notification' in window)){setStatus('このブラウザでは通知を利用できません');return;}if(Notification.permission==='denied'){setStatus('ブラウザの設定で通知を許可してください');return;}if(Notification.permission==='granted'&&'serviceWorker' in navigator)navigator.serviceWorker.ready.then(registration=>registration.pushManager.getSubscription()).then(subscription=>setStatus(subscription?'この端末の通知は有効です':'この端末の通知は未設定です')).catch(()=>{});},[]);
   async function enable(){
     try{
-      if(!('serviceWorker' in navigator)||!('PushManager' in window)||!('Notification' in window))throw new Error('このブラウザでは通知を利用できません');
+      if(!pushSupported())throw new Error('このブラウザでは通知を利用できません');
       const permission=await Notification.requestPermission();if(permission!=='granted')throw new Error('通知が許可されていません');
-      const {publicKey}=await api<{publicKey:string|null}>('/api/push/key');if(!publicKey)throw new Error('通知キーがまだ設定されていません');
-      const padded=publicKey.replace(/-/g,'+').replace(/_/g,'/');const bytes=Uint8Array.from(atob(padded+'='.repeat((4-padded.length%4)%4)),c=>c.charCodeAt(0));
-      const registration=await navigator.serviceWorker.ready;
-      const subscription=await registration.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:bytes});
-      const serialized=subscription.toJSON();await post('/api/push/subscriptions',serialized);setStatus('通知を有効にしました');
+      await syncPushSubscription();setStatus('通知を有効にしました');
     }catch(e){setStatus((e as Error).message);}
   }
   return <section className="push-setup"><h2>通知</h2><p>画面を閉じているときも、自分宛ての連絡を受け取れます。iPhoneでは、先にホーム画面へ追加してください。</p><button onClick={enable}>通知を有効にする</button>{status&&<p role="status">{status}</p>}</section>;
@@ -136,6 +133,8 @@ export function App(){
   useEffect(()=>{if(!user)return;return connectLive(reload);},[user,reload]);
   useEffect(()=>{if(!user)return;api<{items:InboxItem[]}>(`/api/inbox?tab=${inboxTab}`).then(d=>setInbox(d.items)).catch(e=>setError(e.message));},[user,inboxTab,refreshSeq]);
   useEffect(()=>{if(!user)return;api<{items:NotificationItem[]}>('/api/notifications').then(d=>setNotifications(d.items)).catch(e=>setError(e.message));},[user,refreshSeq]);
+  useEffect(()=>{if(user)applyBadge(navigator,notifications.length);},[user,notifications.length]);
+  useEffect(()=>{if(user)syncPushSubscription().catch(()=>{});},[user]);
   const [latestChannel,setLatestChannel]=useState(0),[latestThread,setLatestThread]=useState(0);
   const channelData=useConversation(channel&&user?`/api/channels/${channel.id}/messages`:null,refreshSeq);
   const threadData=useConversation(thread&&channel&&user?`/api/channels/${channel.id}/messages?thread=${thread.id}`:null,refreshSeq);
@@ -163,7 +162,7 @@ export function App(){
   function invite(spaceId:string){const space=spaces.find(item=>item.id===spaceId);if(space)openPeople(space);}
   async function archiveSpace(space:Space){if(!confirm(`スペース「${space.name}」をアーカイブしますか？参加者から見えなくなり、チャンネルへの投稿・メール受信が停止します。`))return;try{await post(`/api/spaces/${space.id}/archive`,{archived:true});setChannel(null);setThread(null);setMailSpace(null);setView('home');reload();}catch(e){setError((e as Error).message);}}
   async function archiveChannel(){if(!channel)return;if(!confirm(`チャンネル「${channel.name}」をアーカイブしますか？投稿・メール受信が停止します。`))return;await post(`/api/channels/${channel.id}/archive`,{archived:true});setSettingsOpen(false);setChannel(null);setThread(null);setView('home');reload();}
-  async function logout(){await post('/api/auth/logout',{});sessionStorage.removeItem('thechat-event-cursor');setUser(null);setView('inbox');}
+  async function logout(){await removePushSubscription().catch(()=>{});applyBadge(navigator,0);await post('/api/auth/logout',{});sessionStorage.removeItem('thechat-event-cursor');setUser(null);setView('inbox');}
   if(!boot)return <div className="loading">{error||'読み込み中…'}</div>;
   if(!user)return <Auth ssoEnabled={boot.ssoEnabled} logoUrl={boot.logoUrl} organizationName={boot.organizationName} onLogin={u=>setUser(u)}/>;
   const threadOpen=!!thread&&view==='thread';
